@@ -119,7 +119,7 @@ class SentimentAnalyzer:
     def __init__(self):
         self._initialize_nltk()
         self.analyzer = SentimentIntensityAnalyzer()
-    
+    '''
     def _initialize_nltk(self) -> None:
         """Initialize NLTK resources."""
         try:
@@ -127,6 +127,7 @@ class SentimentAnalyzer:
         except nltk.DownloadError:
             st.info("Downloading resources for sentiment analysis (NLTK)...")
             nltk.download('vader_lexicon')
+    '''
     
     def analyze_text(self, text: str) -> SentimentAnalysis:
         """Perform sentiment analysis on text."""
