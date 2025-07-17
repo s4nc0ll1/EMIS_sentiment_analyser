@@ -1,20 +1,6 @@
-#Versión estable de Python
-python==3.11
-
-# Framework principal de la aplicación web
 streamlit==1.33.0
-
-# Para realizar peticiones HTTP a la API de EMIS
 requests==2.31.0
-
-# Para cargar variables de entorno desde el archivo .env
 python-dotenv==1.0.1
-
-# Para manipulación de datos y dataframes
 pandas==2.2.1
-
-# Para la creación de gráficos interactivos
 plotly==5.20.0
-
-# Para el análisis de sentimiento (VADER)
 nltk==3.8.1
