@@ -122,7 +122,7 @@ class DataLoader:
             return [""]
 
 
-@st.cache_resource(ttl=None) # Mantenemos el cache_resource para la instancia del analizador
+@st.cache_resource(ttl=None)
 class SentimentAnalyzer:
     """Handles sentiment analysis operations."""
     
@@ -131,26 +131,32 @@ class SentimentAnalyzer:
         self.analyzer = SentimentIntensityAnalyzer()
     
     def _initialize_nltk(self) -> None:
-        """Initialize NLTK resources by setting custom data path."""
-        nltk_data_custom_path = str(Path(__file__).parent / "nltk_data")
-
-        # Añadir la ruta personalizada al PATH de NLTK si no está ya allí
-        if nltk_data_custom_path not in nltk.data.path:
-            nltk.data.path.append(nltk_data_custom_path)
-            logger.info(f"Added custom NLTK data path: {nltk_data_custom_path}")
-
+        """Initialize NLTK resources with automatic download."""
         try:
-            # Intentar encontrar el léxico VADER. NLTK ahora lo buscará en las rutas definidas.
-            nltk.data.find('sentiment/vader_lexicon.zip')
-            logger.info("NLTK vader_lexicon found using custom path.")
-        except nltk.downloader.DownloadError:
-            # Si no se encuentra, es un error crítico en el despliegue del archivo.
-            error_msg = ("NLTK vader_lexicon not found in local data path. "
-                         "Please ensure 'vader_lexicon.txt' is correctly placed "
-                         "in 'nltk_data/sentiment/vader_lexicon/' in your repository and committed.")
-            st.error(error_msg)
-            logger.error(error_msg)
-            raise # Lanzar excepción para detener la app si los datos no están
+            # Test if vader_lexicon is available
+            from nltk.sentiment.vader import SentimentIntensityAnalyzer
+            test_analyzer = SentimentIntensityAnalyzer()
+            test_analyzer.polarity_scores("test")
+            logger.info("NLTK vader_lexicon found and working.")
+        except (LookupError, FileNotFoundError, OSError) as e:
+            # Si no se encuentra, descargarlo automáticamente 
+            logger.info(f"NLTK vader_lexicon not found ({e}), downloading...")
+            try:
+                import nltk
+                nltk.download('vader_lexicon', quiet=True)
+                logger.info("NLTK vader_lexicon downloaded successfully.")
+                
+                # Verificar que funciona después de la descarga
+                from nltk.sentiment.vader import SentimentIntensityAnalyzer
+                test_analyzer = SentimentIntensityAnalyzer()
+                test_analyzer.polarity_scores("test")
+                logger.info("NLTK vader_lexicon verified after download.")
+                
+            except Exception as download_error:
+                error_msg = f"Failed to download NLTK vader_lexicon: {download_error}"
+                st.error(error_msg)
+                logger.error(error_msg)
+                raise RuntimeError(error_msg) from download_error
 
     def analyze_text(self, text: str) -> SentimentAnalysis:
         """Perform sentiment analysis on text."""
@@ -190,7 +196,6 @@ class SentimentAnalyzer:
             f"Breakdown: (Positive: {scores['pos']:.2f}, "
             f"Negative: {scores['neg']:.2f}, Neutral: {scores['neu']:.2f})"
         )
-
 
 class DocumentAnalyzer:
     """Handles document analysis operations."""
