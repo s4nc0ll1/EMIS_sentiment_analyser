@@ -122,7 +122,7 @@ class DataLoader:
             return [""]
 
 
-@st.cache_resource(ttl=None) # Cache indefinitely, as it's a fixed resource (NLTK analyzer)
+@st.cache_resource(ttl=None) # Mantenemos el cache_resource para la instancia del analizador
 class SentimentAnalyzer:
     """Handles sentiment analysis operations."""
     
@@ -131,15 +131,26 @@ class SentimentAnalyzer:
         self.analyzer = SentimentIntensityAnalyzer()
     
     def _initialize_nltk(self) -> None:
-        """Initialize NLTK resources."""
+        """Initialize NLTK resources by setting custom data path."""
+        nltk_data_custom_path = str(Path(__file__).parent / "nltk_data")
+
+        # Añadir la ruta personalizada al PATH de NLTK si no está ya allí
+        if nltk_data_custom_path not in nltk.data.path:
+            nltk.data.path.append(nltk_data_custom_path)
+            logger.info(f"Added custom NLTK data path: {nltk_data_custom_path}")
+
         try:
-            # Check if the resource is already downloaded
+            # Intentar encontrar el léxico VADER. NLTK ahora lo buscará en las rutas definidas.
             nltk.data.find('sentiment/vader_lexicon.zip')
-            logger.info("NLTK vader_lexicon already found.")
+            logger.info("NLTK vader_lexicon found using custom path.")
         except nltk.downloader.DownloadError:
-            st.info("Downloading resources for sentiment analysis (NLTK)... This happens only once.")
-            nltk.download('vader_lexicon', quiet=True) # Use quiet=True to reduce console output
-            logger.info("NLTK vader_lexicon downloaded.")
+            # Si no se encuentra, es un error crítico en el despliegue del archivo.
+            error_msg = ("NLTK vader_lexicon not found in local data path. "
+                         "Please ensure 'vader_lexicon.txt' is correctly placed "
+                         "in 'nltk_data/sentiment/vader_lexicon/' in your repository and committed.")
+            st.error(error_msg)
+            logger.error(error_msg)
+            raise # Lanzar excepción para detener la app si los datos no están
 
     def analyze_text(self, text: str) -> SentimentAnalysis:
         """Perform sentiment analysis on text."""
