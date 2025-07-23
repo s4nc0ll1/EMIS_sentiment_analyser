@@ -19,7 +19,10 @@ import requests
 from dotenv import load_dotenv
 
 # Configure stdout encoding
-sys.stdout.reconfigure(encoding='utf-8')
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+except (AttributeError, OSError):
+    pass
 
 # Load environment variables
 load_dotenv()
