@@ -19,6 +19,12 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+st.set_page_config(
+    page_title='EMIS Document Analyzer',
+    layout='wide',
+    initial_sidebar_state='expanded'
+)
+
 
 @dataclass
 class SearchParameters:
@@ -54,6 +60,7 @@ class DataLoader:
     DATA_DIR = Path("data")
     
     @staticmethod
+    @st.cache_data(ttl=3600) # Cache JSON file loading for 1 hour
     def load_json_file(file_path: Path, error_message: str) -> Dict[str, Any]:
         """Load and parse JSON file with error handling."""
         try:
@@ -73,6 +80,7 @@ class DataLoader:
             return {}
     
     @classmethod
+    @st.cache_data(ttl=3600) # Cache countries list for 1 hour
     def load_countries(cls) -> List[str]:
         """Load country names from countries.json."""
         file_path = cls.DATA_DIR / "countries.json"
@@ -93,6 +101,7 @@ class DataLoader:
             return [""]
     
     @classmethod
+    @st.cache_data(ttl=3600) # Cache industries list for 1 hour
     def load_industries(cls) -> List[str]:
         """Load industry names from industries.json."""
         file_path = cls.DATA_DIR / "industries.json"
@@ -113,22 +122,25 @@ class DataLoader:
             return [""]
 
 
+@st.cache_resource(ttl=None) # Cache indefinitely, as it's a fixed resource (NLTK analyzer)
 class SentimentAnalyzer:
     """Handles sentiment analysis operations."""
     
     def __init__(self):
         self._initialize_nltk()
         self.analyzer = SentimentIntensityAnalyzer()
-    '''
+    
     def _initialize_nltk(self) -> None:
         """Initialize NLTK resources."""
         try:
+            # Check if the resource is already downloaded
             nltk.data.find('sentiment/vader_lexicon.zip')
-        except nltk.DownloadError:
-            st.info("Downloading resources for sentiment analysis (NLTK)...")
-            nltk.download('vader_lexicon')
-    '''
-    
+            logger.info("NLTK vader_lexicon already found.")
+        except nltk.downloader.DownloadError:
+            st.info("Downloading resources for sentiment analysis (NLTK)... This happens only once.")
+            nltk.download('vader_lexicon', quiet=True) # Use quiet=True to reduce console output
+            logger.info("NLTK vader_lexicon downloaded.")
+
     def analyze_text(self, text: str) -> SentimentAnalysis:
         """Perform sentiment analysis on text."""
         if not text or not text.strip():
@@ -173,6 +185,8 @@ class DocumentAnalyzer:
     """Handles document analysis operations."""
     
     def __init__(self):
+        # SentimentAnalyzer is now cached globally, so instantiating it here
+        # will retrieve the single cached instance.
         self.sentiment_analyzer = SentimentAnalyzer()
     
     def analyze_documents(self, documents: List[Dict[str, Any]]) -> pd.DataFrame:
@@ -203,7 +217,8 @@ class SessionStateManager:
         "logged_in",
         "result",
         "general_analysis_df",
-        "search_info"
+        "search_info",
+        "emis_api_token" # <-- Añadir esta clave para el token
     ]
     
     @staticmethod
@@ -213,7 +228,8 @@ class SessionStateManager:
             "logged_in": False,
             "result": None,
             "general_analysis_df": None,
-            "search_info": None
+            "search_info": None,
+            "emis_api_token": None # <-- Inicializar el token en None
         }
         
         for key, default_value in defaults.items():
@@ -232,6 +248,7 @@ class SessionStateManager:
         """Reset all session state on logout."""
         for key in SessionStateManager.SESSION_KEYS:
             st.session_state[key] = None if key != "logged_in" else False
+        st.session_state["logged_in"] = False # Asegurar que logged_in es False
 
 
 class UIComponents:
@@ -268,6 +285,7 @@ class UIComponents:
         """Render search filter sidebar."""
         st.sidebar.header("Search Filters")
         
+        # DataLoader methods are now cached
         country_list = DataLoader.load_countries()
         industry_list = DataLoader.load_industries()
         
@@ -450,19 +468,27 @@ class EmisDocumentApp:
         self.ui_components = UIComponents()
         self.document_analyzer = DocumentAnalyzer()
         self.document_filter = DocumentFilter()
-        self.emis_client = None
+        self.emis_client = None # Will be set by the cached getter
         
         # Initialize configuration
-        self._setup_page_config()
         self.session_manager.initialize()
-    
-    def _setup_page_config(self) -> None:
-        """Setup Streamlit page configuration."""
-        st.set_page_config(
-            page_title='EMIS Document Analyzer',
-            layout='wide',
-            initial_sidebar_state='expanded'
-        )
+
+    @st.cache_resource(ttl=3600) # Cache the EMIS client for 1 hour. Adjust TTL based on token expiry
+    def _get_emis_client(_self, api_token: str): # _self para evitar el hashing de la instancia
+        """Initializes and caches the EmisDocuments client."""
+        # Import here to avoid potential circular dependencies and ensure lazy loading
+        from emis_api import EmisDocuments
+        from config import Config
+        
+        # Ya no es necesario establecer el token en Config aquí, ya que el token se pasa directamente a EmisDocuments.
+        # Además, Config es volátil en re-ejecuciones de Streamlit.
+        
+        try:
+            client = EmisDocuments(api_key=api_token) # Pasar el token directamente
+            return client
+        except Exception as e:
+            logger.error(f"Failed to initialize EMIS client with provided token: {e}")
+            raise # Re-raise to be caught by _handle_login
     
     def run(self) -> None:
         """Run the main application."""
@@ -490,25 +516,27 @@ class EmisDocumentApp:
             return
         
         try:
-            # Import here to avoid circular imports
-            from emis_api import EmisDocuments
-            from config import Config
+            # Guardar el token en session_state para que persista
+            st.session_state.emis_api_token = emis_token 
             
-            Config._Config__conf["EMIS"]["token"] = emis_token
-            self.emis_client = EmisDocuments(api_key=Config.get_emis_config()["token"])
+            # Usar el getter del cliente cacheado
+            self.emis_client = self._get_emis_client(emis_token)
             st.session_state.logged_in = True
             st.success("Login successful!")
             st.rerun()
         except Exception as e:
             st.error(f"Login failed. Could not initialize services: {e}")
             logger.error(f"Login failed: {e}")
+            # Limpiar el token de sesión si el login falla, para no quedar en un estado inconsistente
+            st.session_state.emis_api_token = None
+            st.session_state.logged_in = False
     
     def _render_main_app(self) -> None:
         """Render main application interface."""
         self.ui_components.load_css()
         self.ui_components.render_logo()
         
-        # Ensure client is initialized
+        # Ensure client is initialized (will try to fetch from cache or re-initialize)
         if not self._ensure_client_initialized():
             return
         
@@ -527,16 +555,24 @@ class EmisDocumentApp:
     def _ensure_client_initialized(self) -> bool:
         """Ensure EMIS client is initialized."""
         if self.emis_client is None:
-            try:
-                from emis_api import EmisDocuments
-                from config import Config
-                
-                self.emis_client = EmisDocuments(api_key=Config.get_emis_config()["token"])
-                return True
-            except Exception as e:
-                st.error(f"Failed to re-initialize clients: {e}. Please try logging out and in again.")
-                logger.error(f"Client initialization failed: {e}")
-                st.session_state.logged_in = False
+            # Intentar obtener el token de session_state, donde debe persistir
+            current_token = st.session_state.get("emis_api_token") 
+            
+            if st.session_state.logged_in and current_token:
+                try:
+                    self.emis_client = self._get_emis_client(current_token)
+                    return True
+                except Exception as e:
+                    st.error(f"Failed to re-initialize EMIS client with cached token: {e}. Please try logging out and in again.")
+                    logger.error(f"Client re-initialization failed: {e}")
+                    self.session_manager.logout() # Force logout if client cannot be re-initialized
+                    st.rerun()
+                    return False
+            else:
+                # Esto ocurre si st.session_state.logged_in es True pero emis_api_token no está o es None.
+                # También cubre el caso de que st.session_state.logged_in sea False (aunque la primera condición `if self.emis_client is None` ya lo habría atrapado).
+                logger.warning("Inconsistent session state: logged_in but no valid token or client. Forcing logout.")
+                self.session_manager.logout()
                 st.rerun()
                 return False
         return True
@@ -610,20 +646,27 @@ class EmisDocumentApp:
     
     def _render_results(self) -> None:
         """Render search results."""
-        if not st.session_state.result:
+        if st.session_state.result is None:
             return
         
         documents = st.session_state.result
+        
+        # Siempre renderizamos la información de los parámetros de búsqueda
+        # si la búsqueda fue intentada y la información está disponible.
+        if st.session_state.search_info:
+            self.ui_components.render_search_info(st.session_state.search_info)
+
+        # Si la lista de documentos está vacía, mostramos un mensaje informativo
+        if not documents:
+            st.info("No documents found for the given criteria. Please try adjusting your search parameters.")
+            return # Terminamos la función aquí, ya que no hay documentos que analizar o listar.
+
+        # Si llegamos aquí, significa que se encontraron documentos.
         st.subheader(f"Search Results ({len(documents)} documents found)")
         
-        # Render search info
-        self.ui_components.render_search_info(st.session_state.search_info)
-        
-        if documents:
-            self._render_general_analysis_section(documents)
-            self._render_individual_documents_section(documents)
-        else:
-            st.info("No documents found for the given criteria.")
+        # Renderizar la sección de análisis general y documentos individuales
+        self._render_general_analysis_section(documents)
+        self._render_individual_documents_section(documents)
     
     def _render_general_analysis_section(self, documents: List[Dict[str, Any]]) -> None:
         """Render general analysis section."""
@@ -726,15 +769,21 @@ class EmisDocumentApp:
     
     def _handle_logout(self) -> None:
         """Handle logout process."""
-        self.session_manager.logout()
+        # Limpiar la entrada del caché del cliente específica para el token actual
+        # Asegurarse de usar la misma clave que se usó para almacenar.
+        current_token = st.session_state.get("emis_api_token")
+        if current_token:
+            self._get_emis_client.clear(api_token=current_token) 
+
+        self.session_manager.logout() # Esto restablece todas las claves de session_state incluyendo logged_in y emis_api_token
         self.emis_client = None
         
-        # Clear config
-        try:
-            from config import Config
-            Config._Config__conf["EMIS"]["token"] = ""
-        except Exception as e:
-            logger.warning(f"Could not clear config on logout: {e}")
+        # El Config global no necesita ser limpiado aquí si ya no almacena el token de forma persistente.
+        # try:
+        #     from config import Config # Import here to ensure it's available
+        #     Config._Config__conf["EMIS"]["token"] = ""
+        # except Exception as e:
+        #     logger.warning(f"Could not clear config on logout: {e}")
         
         st.rerun()
 
