@@ -60,6 +60,7 @@ class CompanyMatch:
     name: str
 
 
+# --- MODIFICACIÓN 1: Añadir campos a la dataclass ---
 @dataclass
 class Document:
     """Data class for document information."""
@@ -67,6 +68,8 @@ class Document:
     date: str
     title: str
     abstract: str
+    topics: List[Dict[str, str]] = field(default_factory=list)
+    industries: List[Dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -156,7 +159,6 @@ class LookupManager:
             logger.info(f"Successfully loaded {len(self._country_lookup)} countries")
         except DataLoaderError as e:
             logger.error(f"Failed to load countries: {e}")
-            # Continue with empty lookup - allows graceful degradation
     
     def _load_industries(self) -> None:
         """Load industries from JSON file and create lookup dictionary."""
@@ -171,51 +173,34 @@ class LookupManager:
             logger.info(f"Successfully loaded {len(self._industry_lookup)} industries")
         except DataLoaderError as e:
             logger.error(f"Failed to load industries: {e}")
-            # Continue with empty lookup - allows graceful degradation
     
     def get_country_code(self, country_name: str) -> Optional[str]:
-        """Get country code for given country name."""
-        if not country_name:
-            return None
-        
+        if not country_name: return None
         code = self._country_lookup.get(country_name.lower())
-        if code:
-            logger.info(f"Found country '{country_name}' -> Code: {code}")
-        else:
-            logger.warning(f"Country '{country_name}' not found in lookup")
-        
+        if code: logger.info(f"Found country '{country_name}' -> Code: {code}")
+        else: logger.warning(f"Country '{country_name}' not found in lookup")
         return code
     
     def get_industry_code(self, industry_name: str) -> Optional[str]:
-        """Get industry code for given industry name."""
-        if not industry_name:
-            return None
-        
+        if not industry_name: return None
         code = self._industry_lookup.get(industry_name.lower())
-        if code:
-            logger.info(f"Found industry '{industry_name}' -> Code: {code}")
-        else:
-            logger.warning(f"Industry '{industry_name}' not found in lookup")
-        
+        if code: logger.info(f"Found industry '{industry_name}' -> Code: {code}")
+        else: logger.warning(f"Industry '{industry_name}' not found in lookup")
         return code
     
     @property
-    def countries_count(self) -> int:
-        """Get number of loaded countries."""
-        return len(self._country_lookup)
+    def countries_count(self) -> int: return len(self._country_lookup)
     
     @property
-    def industries_count(self) -> int:
-        """Get number of loaded industries."""
-        return len(self._industry_lookup)
+    def industries_count(self) -> int: return len(self._industry_lookup)
 
 
 class HTTPClient:
     """HTTP client for making API requests."""
     
-    def __init__(self, base_url: str, api_key: str, timeout: int = 30):  # Add api_key parameter
+    def __init__(self, base_url: str, api_key: str, timeout: int = 30):
         self.base_url = base_url
-        self.api_key = api_key  # Store API key
+        self.api_key = api_key
         self.timeout = timeout
         self.session = requests.Session()
         self.session.headers.update({
@@ -225,46 +210,27 @@ class HTTPClient:
         })
     
     def get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Make GET request to API endpoint."""
         url = self.base_url + endpoint
         request_params = params.copy() if params else {}
         request_params['token'] = self.api_key
         
         try:
             logger.info(f"Making GET request to: {url}")
-            response = self.session.get(
-                url, 
-                params=request_params,  # Use updated params with token
-                timeout=self.timeout
-            )
-            
+            response = self.session.get(url, params=request_params, timeout=self.timeout)
             response.raise_for_status()
             logger.info(f"Request successful: {response.status_code}")
-            
             return response.json()
         
         except requests.exceptions.Timeout:
-            error_msg = f"Request timeout for URL: {url}"
-            logger.error(error_msg)
-            raise APIClientError(error_msg)
-        
+            raise APIClientError(f"Request timeout for URL: {url}")
         except requests.exceptions.HTTPError as e:
-            error_msg = f"HTTP error for URL: {url} - {e}"
-            logger.error(error_msg)
-            raise APIClientError(error_msg)
-        
+            raise APIClientError(f"HTTP error for URL: {url} - {e}")
         except requests.exceptions.RequestException as e:
-            error_msg = f"Request failed for URL: {url} - {e}"
-            logger.error(error_msg)
-            raise APIClientError(error_msg)
-        
+            raise APIClientError(f"Request failed for URL: {url} - {e}")
         except json.JSONDecodeError:
-            error_msg = f"Invalid JSON response from URL: {url}"
-            logger.error(error_msg)
-            raise APIClientError(error_msg)
+            raise APIClientError(f"Invalid JSON response from URL: {url}")
     
     def close(self) -> None:
-        """Close the HTTP session."""
         self.session.close()
 
 
@@ -273,26 +239,13 @@ class SearchValidator:
     
     @staticmethod
     def validate_search_parameters(params: SearchParameters) -> None:
-        """Validate search parameters."""
-        if not any([
-            params.country_name,
-            params.company_name,
-            params.keyword,
-            params.industry_name
-        ]):
-            raise ValidationError(
-                "At least one search parameter (country, company, keyword, or industry) must be provided"
-            )
-        
-        if params.limit <= 0:
-            raise ValidationError("Limit must be a positive integer")
-        
-        if params.limit > 1000:
-            logger.warning(f"Large limit specified: {params.limit}. This may impact performance.")
+        if not any([params.country_name, params.company_name, params.keyword, params.industry_name]):
+            raise ValidationError("At least one search parameter must be provided")
+        if params.limit <= 0: raise ValidationError("Limit must be a positive integer")
+        if params.limit > 1000: logger.warning(f"Large limit specified: {params.limit}")
     
     @staticmethod
     def validate_api_key(api_key: str) -> None:
-        """Validate API key."""
         if not api_key or not api_key.strip():
             raise ValidationError("API key cannot be empty")
 
@@ -302,9 +255,7 @@ class DocumentProcessor:
     
     @staticmethod
     def process_documents(api_response: Dict[str, Any]) -> List[Document]:
-        """Process documents from API response."""
         documents = []
-        
         if not api_response or "data" not in api_response:
             logger.warning("API response missing 'data' field")
             return documents
@@ -314,11 +265,14 @@ class DocumentProcessor:
         
         for item in items:
             try:
+                # --- MODIFICACIÓN 2: Extraer topics e industries ---
                 document = Document(
                     id=item.get("id", ""),
                     date=item.get("creationDate", ""),
                     title=item.get("title", "No title"),
-                    abstract=item.get("abstract", "")
+                    abstract=item.get("abstract", ""),
+                    topics=item.get("topics", []),
+                    industries=item.get("industries", [])
                 )
                 documents.append(document)
             except Exception as e:
@@ -336,56 +290,34 @@ class CompanyMatcher:
         self.lookup_manager = lookup_manager
     
     def match_company(self, company_name: str, country_name: Optional[str] = None) -> Optional[CompanyMatch]:
-        """Match company name to company ID."""
-        if not company_name:
-            return None
-        
+        if not company_name: return None
         params = {"company_name": company_name}
         
-        # Add country filter if provided
         if country_name:
-            country_code = self.lookup_manager.get_country_code(country_name)
-            if country_code:
+            if country_code := self.lookup_manager.get_country_code(country_name):
                 params["country_code"] = country_code
-                log_context = f" in country '{country_name}' (Code: {country_code})"
             else:
-                logger.warning(f"Cannot match company '{company_name}' - country '{country_name}' not found")
                 return None
-        else:
-            log_context = " globally"
-        
-        logger.info(f"Matching company '{company_name}'{log_context}")
         
         try:
             response = self.http_client.get(APIEndpoint.COMPANIES_MATCH.value, params=params)
             return self._process_company_match_response(response, company_name)
-        
         except APIClientError as e:
             logger.error(f"Company matching failed: {e}")
             return None
     
     def _process_company_match_response(self, response: Dict[str, Any], company_name: str) -> Optional[CompanyMatch]:
-        """Process company match response."""
-        if not response or "data" not in response:
-            logger.warning(f"Invalid response structure for company '{company_name}'")
-            return None
-        
-        items = response["data"].get("items", [])
-        if not items:
+        if not response or "data" not in response or not (items := response["data"].get("items")):
             logger.warning(f"No matches found for company '{company_name}'")
             return None
         
-        # Take the first (best) match
         matched_company = items[0]
-        company_id = matched_company.get("companyId")
-        
-        if company_id is None:
-            logger.warning(f"Matched company found but missing 'companyId' for '{company_name}'")
+        if not (company_id := matched_company.get("companyId")):
+            logger.warning(f"Matched company missing 'companyId' for '{company_name}'")
             return None
         
         matched_name = matched_company.get("companyName", company_name)
         logger.info(f"Successfully matched company '{matched_name}' (ID: {company_id})")
-        
         return CompanyMatch(id=str(company_id), name=matched_name)
 
 
@@ -394,151 +326,74 @@ class EmisDocuments:
     
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or os.getenv("EMIS_API_KEY")
-
         SearchValidator.validate_api_key(self.api_key)
         
-        # Initialize components
         self.data_loader = JSONDataLoader()
         self.lookup_manager = LookupManager(self.data_loader)
         self.http_client = HTTPClient(APIEndpoint.BASE_URL.value, self.api_key)
         self.company_matcher = CompanyMatcher(self.http_client, self.lookup_manager)
         self.document_processor = DocumentProcessor()
         self.validator = SearchValidator()
-        
-        # Validate API key
-        if self.api_key:
-            self.validator.validate_api_key(self.api_key)
     
-    def run(self, 
-            country_name: Optional[str] = None,
-            company_name: Optional[str] = None,
-            keyword: Optional[str] = None,
-            industry_name: Optional[str] = None,
-            limit: int = 100) -> Dict[str, Any]:
-        """
-        Search for documents based on provided criteria.
+    def run(self, **kwargs) -> Dict[str, Any]:
+        """Search for documents based on provided criteria."""
+        if not self.api_key: raise ValidationError("EMIS API key not set.")
         
-        Args:
-            country_name: Name of the country to search in
-            company_name: Name of the company to search for
-            keyword: Keyword to search for in documents
-            industry_name: Name of the industry to search in
-            limit: Maximum number of documents to return
-            
-        Returns:
-            Dictionary containing search results and metadata
-            
-        Raises:
-            ValidationError: If search parameters are invalid
-            APIClientError: If API request fails
-        """
-        # Validate API key
-        if not self.api_key:
-            raise ValidationError("EMIS API key not set. Please provide an API key.")
-        
-        # Create and validate search parameters
-        search_params = SearchParameters(
-            country_name=country_name,
-            company_name=company_name,
-            keyword=keyword,
-            industry_name=industry_name,
-            limit=limit
-        )
-        
+        search_params = SearchParameters(**kwargs)
         self.validator.validate_search_parameters(search_params)
-        
-        # Resolve search parameters
         resolved_params = self._resolve_search_parameters(search_params)
-        
-        # Perform search
         documents = self._search_documents(resolved_params)
-        
-        # Return results
         return self._build_search_result(documents, resolved_params)
     
     def _resolve_search_parameters(self, params: SearchParameters) -> Dict[str, Any]:
-        """Resolve search parameters to API format."""
-        resolved = {
-            "limit": params.limit,
-            "order": params.order,
-        }
+        resolved = {"limit": params.limit, "order": params.order}
         
-        # Resolve country
-        country_code = None
-        if params.country_name:
-            country_code = self.lookup_manager.get_country_code(params.country_name)
-            if country_code:
-                resolved["country"] = country_code
+        country_code = self.lookup_manager.get_country_code(params.country_name) if params.country_name else None
+        if country_code: resolved["country"] = country_code
         
-        # Resolve company
-        company_match = None
-        if params.company_name:
-            company_match = self.company_matcher.match_company(params.company_name, params.country_name)
-            if company_match:
-                resolved["company_ids"] = company_match.id
+        company_match = self.company_matcher.match_company(params.company_name, params.country_name) if params.company_name else None
+        if company_match: resolved["company_ids"] = company_match.id
         
-        # Resolve industry
-        industry_code = None
-        if params.industry_name:
-            industry_code = self.lookup_manager.get_industry_code(params.industry_name)
-            if industry_code:
-                resolved["industry"] = industry_code
+        industry_code = self.lookup_manager.get_industry_code(params.industry_name) if params.industry_name else None
+        if industry_code: resolved["industry"] = industry_code
         
-        # Add keyword directly
-        if params.keyword:
-            resolved["keyword"] = params.keyword
+        if params.keyword: resolved["keyword"] = params.keyword
         
-        # Store metadata for result
-        resolved["_metadata"] = {
-            "country_code": country_code,
-            "company_match": company_match,
-            "industry_code": industry_code
-        }
-        
+        resolved["_metadata"] = {"country_code": country_code, "company_match": company_match, "industry_code": industry_code}
         return resolved
     
     def _search_documents(self, resolved_params: Dict[str, Any]) -> List[Document]:
-        """Search for documents using resolved parameters."""
-        # --- INICIO DE LA CORRECCIÓN ---
-        # Crea una copia para no modificar el diccionario original.
         api_call_params = resolved_params.copy()
+        api_call_params.pop("_metadata", {})
         
-        # Extrae los metadatos de la copia, no del original.
-        # El diccionario original 'resolved_params' permanece intacto.
-        metadata = api_call_params.pop("_metadata", {})
-        # --- FIN DE LA CORRECCIÓN ---
-
-        # Comprueba si tenemos parámetros de búsqueda válidos en la copia
-        search_fields = ["country", "company_ids", "keyword", "industry"]
-        if not any(field in api_call_params for field in search_fields):
+        if not any(field in api_call_params for field in ["country", "company_ids", "keyword", "industry"]):
             logger.error("No valid search parameters after resolution")
             return []
         
-        # Usa la copia para el log y la llamada a la API
         logger.info(f"Searching documents with parameters: {api_call_params}")
-        
         try:
             response = self.http_client.get(APIEndpoint.DOCUMENTS_SEARCH.value, params=api_call_params)
             documents = self.document_processor.process_documents(response)
             logger.info(f"Successfully retrieved {len(documents)} documents")
             return documents
-        
         except APIClientError as e:
             logger.error(f"Document search failed: {e}")
             return []
         
     def _build_search_result(self, documents: List[Document], resolved_params: Dict[str, Any]) -> Dict[str, Any]:
-        """Build search result dictionary."""
         metadata = resolved_params.get("_metadata", {})
         company_match = metadata.get("company_match")
         
         return {
+            # --- MODIFICACIÓN 3: Incluir topics e industries en el resultado ---
             "documents": [
                 {
                     "id": doc.id,
                     "date": doc.date,
                     "title": doc.title,
-                    "abstract": doc.abstract
+                    "abstract": doc.abstract,
+                    "topics": doc.topics,
+                    "industries": doc.industries
                 }
                 for doc in documents
             ],
@@ -549,49 +404,22 @@ class EmisDocuments:
         }
     
     def get_stats(self) -> Dict[str, int]:
-        """Get statistics about loaded lookup data."""
-        return {
-            "countries_loaded": self.lookup_manager.countries_count,
-            "industries_loaded": self.lookup_manager.industries_count
-        }
+        return {"countries_loaded": self.lookup_manager.countries_count, "industries_loaded": self.lookup_manager.industries_count}
     
-    def close(self) -> None:
-        """Close the HTTP client."""
-        self.http_client.close()
-    
-    def __enter__(self):
-        """Context manager entry."""
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit."""
-        self.close()
+    def close(self) -> None: self.http_client.close()
+    def __enter__(self): return self
+    def __exit__(self, exc_type, exc_val, exc_tb): self.close()
 
-
-# Factory function for easier instantiation
 def create_emis_client(api_key: Optional[str] = None) -> EmisDocuments:
-    """Create EMIS client with default configuration."""
     return EmisDocuments(api_key=api_key)
 
-
-# Example usage
 if __name__ == "__main__":
-    # Example of how to use the refactored client
     try:
         with create_emis_client() as client:
-            # Get statistics
             stats = client.get_stats()
             print(f"Loaded data: {stats}")
-            
-            # Perform search
-            result = client.run(
-                country_name="United States",
-                company_name="Apple Inc",
-                keyword="financial",
-                limit=50
-            )
-            
-            print(f"Found {len(result['documents'])} documents")
+            result = client.run(country_name="United States", company_name="Apple Inc", keyword="financial", limit=5)
+            print(json.dumps(result, indent=2))
             
     except (ValidationError, APIClientError) as e:
         logger.error(f"Search failed: {e}")
