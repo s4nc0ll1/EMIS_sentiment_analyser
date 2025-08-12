@@ -12,3 +12,9 @@ dependencies = [
     "requests>=2.32.4",
     "streamlit>=1.28.0",
 ]
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
+    "isort>=6.0.1",
+]
