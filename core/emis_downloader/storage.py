@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS document_industries (
 """
 
 
-class SQLiteStor:
+class SQLiteStore:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
