@@ -1,7 +1,8 @@
+from .fetcher import fetch_all
 from .models import EnrichedDoc, RawDoc, SearchContext
+from .resolver import build_search_params
 from .sentiment import VaderSentimentScorer
 from .storage import SQLiteStore
-from .resolver import build_search_params
 
 __all__ = [
     "RawDoc",
@@ -9,5 +10,6 @@ __all__ = [
     "SearchContext",
     "VaderSentimentScorer",
     "SQLiteStore",
-    "build_search_params"
+    "build_search_params",
+    "fetch_all",
 ]
