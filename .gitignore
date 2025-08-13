@@ -7,3 +7,4 @@ __pycache__/
 /data/*.sqlite-shm
 /data/*.sqlite-wal
 /data/*-journal
+/data/*.csv
