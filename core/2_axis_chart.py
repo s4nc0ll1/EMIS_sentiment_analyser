@@ -70,7 +70,7 @@ def plot_sources_comparison(source1_data, source2_data):
         sel.annotation.set_color("white")
 
     plt.tight_layout()
-    plt.show()
+    return fig  
 
 if __name__ == "__main__":
     source1_data = {
@@ -85,4 +85,5 @@ if __name__ == "__main__":
         "series_id": np.random.randint(3000, 4000, size=20)
     }
 
-    plot_sources_comparison(source1_data, source2_data)
+    fig = plot_sources_comparison(source1_data, source2_data)
+    plt.show()  
