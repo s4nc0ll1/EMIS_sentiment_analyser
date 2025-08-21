@@ -1,773 +1,737 @@
 """
-EMIS Document Analyzer
-A Streamlit application for analyzing EMIS documents with sentiment analysis capabilities.
+Streamlit application for visualizing CEIC time series data with sentiment analysis.
+
+This module provides a web interface for loading, visualizing, and analyzing
+CEIC economic data series along with related news sentiment analysis.
 """
 
-import json
-import logging
-from abc import ABC, abstractmethod
+import os
+import traceback
+from datetime import datetime
+from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
 
-import nltk
+import streamlit as st
 import pandas as pd
 import plotly.express as px
-import streamlit as st
+import requests
+import nltk
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
+from dotenv import load_dotenv
+from streamlit_plotly_events import plotly_events
+from ceic_api_client.pyceic import Ceic
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from series import SeriesVisualizer
 
-st.set_page_config(
-    page_title="EMIS Document Analyzer", layout="wide", initial_sidebar_state="expanded"
-)
+# Load environment variables
+load_dotenv()
 
-
-@dataclass
-class SearchParameters:
-    """Data class for search parameters."""
-
-    country_name: Optional[str] = None
-    company_name: Optional[str] = None
-    keyword: Optional[str] = None
-    industry_name: Optional[str] = None
-    limit: int = 100
-
-
-@dataclass
-class SearchResult:
-    """Data class for search results."""
-
-    documents: List[Dict[str, Any]]
-    country_code: Optional[str] = None
-    company_id: Optional[str] = None
-    matched_company_name: Optional[str] = None
-    industry_code: Optional[str] = None
+# Configuration constants
+class Config:
+    """Application configuration constants."""
+    LOGO_PATH = "./static/logo2.png"
+    LOGO_WIDTH = 250
+    SIDEBAR_LOGO_WIDTH = 200
+    EMIS_API_URL = "https://api.emis.com/v2/company/documents"
+    MAX_DOCUMENTS_PAGES = 10
+    DOCUMENTS_PER_PAGE = 100
+    MAX_TITLE_LENGTH = 50
 
 
 @dataclass
-class SentimentAnalysis:
-    """Data class for sentiment analysis results."""
+class SessionStateKeys:
+    """Session state keys to avoid magic strings."""
+    LOGGED_IN = 'logged_in'
+    CEIC_CLIENT = 'ceic_client'
+    VISUALIZER_OBJECT = 'visualizer_object'
+    SENTIMENT_DF = 'sentiment_df'
+    RAW_DOCUMENTS = 'raw_documents'
+    SELECTED_SENTIMENT_DATE = 'selected_sentiment_date'
 
-    sentiment: str
-    score: float
-    analysis_text: str
+
+class AuthenticationError(Exception):
+    """Raised when authentication fails."""
+    pass
 
 
-class DataLoader:
-    """Handles loading of static data files."""
+class DataFetchError(Exception):
+    """Raised when data fetching operations fail."""
+    pass
 
-    DATA_DIR = Path("data")
+
+class SentimentAnalysisError(Exception):
+    """Raised when sentiment analysis fails."""
+    pass
+
+
+class AppInitializer:
+    """Handles application initialization and setup."""
 
     @staticmethod
-    @st.cache_data(ttl=3600)  # Cache JSON file loading for 1 hour
-    def load_json_file(file_path: Path, error_message: str) -> Dict[str, Any]:
-        """Load and parse JSON file with error handling."""
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except FileNotFoundError:
-            st.error(f"Error: {file_path} not found.")
-            logger.error(f"File not found: {file_path}")
-            return {}
-        except json.JSONDecodeError as e:
-            st.error(f"JSON decode error in {file_path}: {e}")
-            logger.error(f"JSON decode error in {file_path}: {e}")
-            return {}
-        except Exception as e:
-            st.error(f"An error occurred while loading {file_path}: {e}")
-            logger.error(f"Error loading {file_path}: {e}")
-            return {}
-
-    @classmethod
-    @st.cache_data(ttl=3600)  # Cache countries list for 1 hour
-    def load_countries(cls) -> List[str]:
-        """Load country names from countries.json."""
-        file_path = cls.DATA_DIR / "countries.json"
-        data = cls.load_json_file(file_path, "countries")
-
-        if not data:
-            return [""]
-
-        try:
-            countries = sorted(
-                [
-                    item["name"]
-                    for item in data.get("data", {}).get("items", [])
-                    if "name" in item
-                ]
-            )
-            return [""] + countries
-        except Exception as e:
-            st.error(f"Error processing countries data: {e}")
-            logger.error(f"Error processing countries data: {e}")
-            return [""]
-
-    @classmethod
-    @st.cache_data(ttl=3600)  # Cache industries list for 1 hour
-    def load_industries(cls) -> List[str]:
-        """Load industry names from industries.json."""
-        file_path = cls.DATA_DIR / "industries.json"
-        data = cls.load_json_file(file_path, "industries")
-
-        if not data:
-            return [""]
-
-        try:
-            industries = sorted([item["name"] for item in data if "name" in item])
-            return [""] + industries
-        except Exception as e:
-            st.error(f"Error processing industries data: {e}")
-            logger.error(f"Error processing industries data: {e}")
-            return [""]
-
-
-@st.cache_resource(ttl=None)
-class SentimentAnalyzer:
-    """Handles sentiment analysis operations."""
-
-    def __init__(self):
-        self._initialize_nltk()
-        self.analyzer = SentimentIntensityAnalyzer()
-
-    def _initialize_nltk(self) -> None:
-        """Initialize NLTK resources with automatic download."""
-        try:
-            from nltk.sentiment.vader import SentimentIntensityAnalyzer
-
-            test_analyzer = SentimentIntensityAnalyzer()
-            test_analyzer.polarity_scores("test")
-            logger.info("NLTK vader_lexicon found and working.")
-        except (LookupError, FileNotFoundError, OSError) as e:
-            logger.info(f"NLTK vader_lexicon not found ({e}), downloading...")
-            try:
-                import nltk
-
-                nltk.download("vader_lexicon", quiet=True)
-                logger.info("NLTK vader_lexicon downloaded successfully.")
-                from nltk.sentiment.vader import SentimentIntensityAnalyzer
-
-                test_analyzer = SentimentIntensityAnalyzer()
-                test_analyzer.polarity_scores("test")
-                logger.info("NLTK vader_lexicon verified after download.")
-            except Exception as download_error:
-                error_msg = f"Failed to download NLTK vader_lexicon: {download_error}"
-                st.error(error_msg)
-                logger.error(error_msg)
-                raise RuntimeError(error_msg) from download_error
-
-    def analyze_text(self, text: str) -> SentimentAnalysis:
-        if not text or not text.strip():
-            return SentimentAnalysis(
-                sentiment="Unknown", score=0.0, analysis_text="No text to analyze."
-            )
-
-        scores = self.analyzer.polarity_scores(text)
-        compound_score = scores["compound"]
-        sentiment = self._determine_sentiment(compound_score)
-        analysis_text = self._format_analysis_text(sentiment, compound_score, scores)
-
-        return SentimentAnalysis(
-            sentiment=sentiment, score=compound_score, analysis_text=analysis_text
+    def setup_page_config() -> None:
+        """Configure Streamlit page settings."""
+        st.set_page_config(
+            page_title="Visor de Series CEIC",
+            layout="wide"
         )
-
-    def _determine_sentiment(self, compound_score: float) -> str:
-        if compound_score >= 0.05:
-            return "Positive"
-        elif compound_score <= -0.05:
-            return "Negative"
-        else:
-            return "Neutral"
-
-    def _format_analysis_text(
-        self, sentiment: str, compound_score: float, scores: Dict[str, float]
-    ) -> str:
-        return (
-            f"The overall sentiment is **{sentiment.lower()}** "
-            f"with a compound score of **{compound_score:.2f}**. "
-            f"Breakdown: (Positive: {scores['pos']:.2f}, "
-            f"Negative: {scores['neg']:.2f}, Neutral: {scores['neu']:.2f})"
-        )
-
-
-class DocumentAnalyzer:
-    """Handles document analysis operations."""
-
-    def __init__(self):
-        self.sentiment_analyzer = SentimentAnalyzer()
-
-    def analyze_documents(self, documents: List[Dict[str, Any]]) -> pd.DataFrame:
-        analyses = []
-        for doc in documents:
-            text_to_analyze = f"{doc.get('title', '')}. {doc.get('abstract', '')}"
-            analysis_result = self.sentiment_analyzer.analyze_text(text_to_analyze)
-            analyses.append(
-                {"date": doc.get("date"), "sentiment": analysis_result.sentiment}
-            )
-
-        if analyses:
-            df = pd.DataFrame(analyses)
-            df["date"] = pd.to_datetime(df["date"]).dt.date
-            return df
-        return pd.DataFrame()
-
-
-class SessionStateManager:
-    """Manages Streamlit session state."""
-
-    SESSION_KEYS = [
-        "logged_in",
-        "result",
-        "general_analysis_df",
-        "search_info",
-        "emis_api_token",
-    ]
 
     @staticmethod
-    def initialize() -> None:
-        defaults = {
-            "logged_in": False,
-            "result": None,
-            "general_analysis_df": None,
-            "search_info": None,
-            "emis_api_token": None,
+    def initialize_session_state() -> None:
+        """Initialize session state with default values."""
+        default_values = {
+            SessionStateKeys.LOGGED_IN: False,
+            SessionStateKeys.CEIC_CLIENT: None,
+            SessionStateKeys.VISUALIZER_OBJECT: None,
+            SessionStateKeys.SENTIMENT_DF: None,
+            SessionStateKeys.RAW_DOCUMENTS: [],
+            SessionStateKeys.SELECTED_SENTIMENT_DATE: None
         }
-        for key, default_value in defaults.items():
+        
+        for key, default_value in default_values.items():
             if key not in st.session_state:
                 st.session_state[key] = default_value
 
     @staticmethod
-    def reset_search_data() -> None:
-        for key in ["result", "general_analysis_df", "search_info"]:
-            st.session_state[key] = None
-
-    @staticmethod
-    def logout() -> None:
-        for key in SessionStateManager.SESSION_KEYS:
-            st.session_state[key] = None if key != "logged_in" else False
-        st.session_state["logged_in"] = False
-
-
-class UIComponents:
-    """Handles UI component rendering."""
-
-    SENTIMENT_COLORS = {
-        "Positive": "green",
-        "Negative": "red",
-        "Neutral": "orange",
-        "Unknown": "grey",
-    }
-
-    @staticmethod
-    def load_css() -> None:
-        css_path = Path("static/styles.css")
+    @st.cache_resource
+    def download_nltk_resources() -> None:
+        """Download required NLTK resources."""
         try:
-            with open(css_path) as f:
-                st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-        except FileNotFoundError:
-            st.warning(f"{css_path} not found. Skipping custom CSS.")
+            nltk.data.find('sentiment/vader_lexicon.zip')
+        except LookupError:
+            st.info("Descargando recursos para análisis de sentimientos (VADER)...")
+            nltk.download('vader_lexicon')
+
+
+class AuthenticationManager:
+    """Handles user authentication operations."""
 
     @staticmethod
-    def render_logo() -> None:
-        logo_path = "static/logo2.png"
-        try:
-            st.logo(logo_path, size="large")
-        except Exception as e:
-            logger.warning(f"Could not load logo: {e}")
+    def render_login_page() -> None:
+        """Render the login page interface."""
+        st.image(Config.LOGO_PATH, width=Config.LOGO_WIDTH)
+        st.title("Visor de Series Point-in-Time")
+        
+        with st.form("login_form"):
+            username = st.text_input("Usuario")
+            password = st.text_input("Contraseña", type="password")
+            submitted = st.form_submit_button("Iniciar Sesión")
+            
+            if submitted:
+                AuthenticationManager._handle_login_submission(username, password)
 
     @staticmethod
-    def render_search_filters() -> SearchParameters:
-        st.sidebar.header("Search Filters")
-        country_list = DataLoader.load_countries()
-        industry_list = DataLoader.load_industries()
-
-        selected_country = st.sidebar.selectbox(
-            "Country Name (Optional)", options=country_list, index=0
-        )
-        company_input = st.sidebar.text_input("Company Name (Optional)")
-        selected_industry = st.sidebar.selectbox(
-            "Industry (Optional)", options=industry_list, index=0
-        )
-        keyword_input = st.sidebar.text_input("Keyword (Optional)")
-
-        return SearchParameters(
-            country_name=selected_country or None,
-            company_name=company_input or None,
-            industry_name=selected_industry or None,
-            keyword=keyword_input or None,
-        )
-
-    @staticmethod
-    def render_search_info(search_info: Dict[str, Any]) -> None:
-        if not search_info:
+    def _handle_login_submission(username: str, password: str) -> None:
+        """Handle login form submission."""
+        if not username or not password:
+            st.warning("Por favor, introduce tu usuario y contraseña.")
             return
-        with st.container(border=True):
-            st.markdown("##### Search Parameters Used")
-            if search_info.get("country_name"):
-                st.markdown(
-                    f"**Country:** `{search_info['country_name']}`   **→**   **Resolved Code:** `{search_info.get('country_code', 'Not Found')}`"
-                )
-            if search_info.get("industry_name"):
-                st.markdown(
-                    f"**Industry:** `{search_info['industry_name']}`   **→**   **Resolved Code:** `{search_info.get('industry_code', 'Not Found')}`"
-                )
-            if search_info.get("company_name"):
-                UIComponents._render_company_info(search_info)
-            if search_info.get("keyword"):
-                st.markdown(f"**Keyword:** `{search_info['keyword']}`")
+        
+        with st.spinner("Iniciando sesión..."):
+            try:
+                client = Ceic.login(username, password)
+                st.session_state[SessionStateKeys.CEIC_CLIENT] = client
+                st.session_state[SessionStateKeys.LOGGED_IN] = True
+                st.success("¡Inicio de sesión exitoso!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error en el inicio de sesión: {e}")
+                AuthenticationManager._reset_authentication_state()
 
     @staticmethod
-    def _render_company_info(search_info: Dict[str, Any]) -> None:
-        company_id = search_info.get("company_id", "Not Found")
-        matched_name = search_info.get("matched_company_name")
-        company_line = f"**Company:** `{search_info['company_name']}`"
-        if matched_name and matched_name.lower() != search_info["company_name"].lower():
-            company_line += f"   **→**   **Resolved Name:** `{matched_name}`"
-        company_line += f"   **→**   **Resolved ID:** `{company_id}`"
-        st.markdown(company_line)
+    def _reset_authentication_state() -> None:
+        """Reset authentication-related session state."""
+        st.session_state[SessionStateKeys.LOGGED_IN] = False
+        st.session_state[SessionStateKeys.CEIC_CLIENT] = None
 
-    @classmethod
-    def render_sentiment_charts(cls, df: pd.DataFrame) -> None:
-        st.subheader("Overall Sentiment Analysis")
-        col1, col2 = st.columns(2)
-        with col1:
-            cls._render_sentiment_distribution(df)
-        with col2:
-            cls._render_sentiment_timeline(df)
 
-    @classmethod
-    def _render_sentiment_distribution(cls, df: pd.DataFrame) -> None:
-        sentiment_counts = df["sentiment"].value_counts()
-        fig_bar = px.bar(
-            sentiment_counts,
-            x=sentiment_counts.index,
-            y=sentiment_counts.values,
-            labels={"x": "Sentiment", "y": "Number of Documents"},
-            title="Total Count by Sentiment",
-            color=sentiment_counts.index,
-            color_discrete_map=cls.SENTIMENT_COLORS,
-        )
-        fig_bar.update_layout(showlegend=False)
-        st.plotly_chart(fig_bar, use_container_width=True)
-
-    @classmethod
-    def _render_sentiment_timeline(cls, df: pd.DataFrame) -> None:
-        time_series_data = (
-            df.groupby(["date", "sentiment"])
-            .size()
-            .reset_index(name="count")
-            .sort_values("date")
-        )
-        fig_line = px.line(
-            time_series_data,
-            x="date",
-            y="count",
-            color="sentiment",
-            labels={
-                "date": "Date",
-                "count": "Number of Documents",
-                "sentiment": "Sentiment",
-            },
-            title="Daily Sentiment Trend",
-            markers=True,
-            color_discrete_map=cls.SENTIMENT_COLORS,
-        )
-        st.plotly_chart(fig_line, use_container_width=True)
+class SeriesDataManager:
+    """Manages series data loading and processing."""
 
     @staticmethod
-    def render_sentiment_result(analysis: SentimentAnalysis) -> None:
-        color = UIComponents.SENTIMENT_COLORS.get(analysis.sentiment, "grey")
-        st.markdown(
-            f"""
-            <div style='border: 1px solid #ddd; padding: 10px; border-radius: 5px; margin-top: 5px;'>
-                <p style='margin-bottom: 5px;'><strong>Sentiment: <span style="color:{color}; font-weight:bold;">{analysis.sentiment}</span></strong></p>
-                <p style='margin-bottom: 0;'><strong>Analysis:</strong> {analysis.analysis_text}</p>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-
-    # --- NUEVA FUNCIÓN ---
-    @classmethod
-    def render_topics_industries_charts(cls, documents: List[Dict[str, Any]]) -> None:
-        """Render charts for top topics and industries."""
-        st.subheader("Content Analysis: Topics & Industries")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("##### Top Topics")
-            topic_df = DocumentFilter.extract_and_count_tags(documents, "topics")
-            if not topic_df.empty:
-                top_n = 15
-                fig = px.bar(
-                    topic_df.head(top_n).sort_values("count", ascending=True),
-                    x="count",
-                    y="name",
-                    orientation="h",
-                    labels={"name": "Topic", "count": "Doc Count"},
-                    title=f"Top {min(top_n, len(topic_df))} Topics",
-                )
-                fig.update_layout(
-                    yaxis={"categoryorder": "total ascending"}, title_x=0.5, height=400
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("No topics found in the search results.")
-        with col2:
-            st.markdown("##### Top Industries")
-            industry_df = DocumentFilter.extract_and_count_tags(documents, "industries")
-            if not industry_df.empty:
-                top_n = 15
-                fig = px.bar(
-                    industry_df.head(top_n).sort_values("count", ascending=True),
-                    x="count",
-                    y="name",
-                    orientation="h",
-                    labels={"name": "Industry", "count": "Doc Count"},
-                    title=f"Top {min(top_n, len(industry_df))} Industries",
-                )
-                fig.update_layout(
-                    yaxis={"categoryorder": "total ascending"}, title_x=0.5, height=400
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("No industries found in the search results.")
-
-
-class DocumentFilter:
-    """Handles document filtering operations."""
+    def load_series(series_id: str) -> None:
+        """Load series data and metadata."""
+        with st.spinner(f"Cargando datos para la serie ID {series_id}..."):
+            try:
+                ceic = st.session_state[SessionStateKeys.CEIC_CLIENT]
+                visualizer = SeriesVisualizer(ceic, series_id)
+                visualizer.fetch_all_data()
+                
+                if visualizer.metadata and visualizer.series_data:
+                    st.session_state[SessionStateKeys.VISUALIZER_OBJECT] = visualizer
+                    st.success(f"Datos cargados para la serie: '{visualizer.metadata.name}'")
+                else:
+                    SeriesDataManager._handle_load_failure(series_id)
+            except Exception as e:
+                st.error(f"Ocurrió un error al cargar la serie: {e}")
+                st.session_state[SessionStateKeys.VISUALIZER_OBJECT] = None
 
     @staticmethod
-    def extract_unique_dates(documents: List[Dict[str, Any]]) -> List[str]:
-        dates = set()
-        for doc in documents:
-            if doc_date := doc.get("date"):
-                try:
-                    dates.add(str(pd.to_datetime(doc_date).date()))
-                except Exception:
-                    dates.add(doc_date)
-        return sorted(list(dates))
+    def _handle_load_failure(series_id: str) -> None:
+        """Handle series loading failure."""
+        st.session_state[SessionStateKeys.VISUALIZER_OBJECT] = None
+        st.error(f"No se pudieron cargar los datos para la serie ID {series_id}. "
+                f"Verifica el ID.")
 
     @staticmethod
-    def filter_documents_by_date(
-        documents: List[Dict[str, Any]], target_date: str
-    ) -> List[Dict[str, Any]]:
-        if not target_date or target_date == "All Dates":
-            return documents
-        filtered_docs = []
-        for doc in documents:
-            if doc_date := doc.get("date"):
-                try:
-                    parsed_doc_date = str(pd.to_datetime(doc_date).date())
-                except Exception:
-                    parsed_doc_date = doc_date
-                if parsed_doc_date == target_date:
-                    filtered_docs.append(doc)
-        return filtered_docs
-
-    # --- NUEVA FUNCIÓN ---
-    @staticmethod
-    def extract_and_count_tags(
-        documents: List[Dict[str, Any]], tag_key: str
-    ) -> pd.DataFrame:
-        """Extract and count tags (topics or industries) from documents."""
-        tag_counts = {}
-        for doc in documents:
-            for tag in doc.get(tag_key, []):
-                if name := tag.get("name"):
-                    tag_counts[name] = tag_counts.get(name, 0) + 1
-        if not tag_counts:
-            return pd.DataFrame()
-        df = pd.DataFrame(list(tag_counts.items()), columns=["name", "count"])
-        return df.sort_values("count", ascending=False).reset_index(drop=True)
-
-    # --- NUEVA FUNCIÓN ---
-    @staticmethod
-    def filter_documents_by_tag(
-        documents: List[Dict[str, Any]], selected_tag: str, tag_key: str
-    ) -> List[Dict[str, Any]]:
-        """Filter documents that contain a specific tag."""
-        capitalized_key = tag_key.capitalize()
-        if not selected_tag or selected_tag.startswith("All "):
-            return documents
-        filtered_docs = []
-        for doc in documents:
-            for tag in doc.get(tag_key, []):
-                if tag.get("name") == selected_tag:
-                    filtered_docs.append(doc)
-                    break
-        return filtered_docs
+    def clear_analysis_data() -> None:
+        """Clear sentiment analysis related data."""
+        st.session_state[SessionStateKeys.SENTIMENT_DF] = None
+        st.session_state[SessionStateKeys.RAW_DOCUMENTS] = []
+        st.session_state[SessionStateKeys.SELECTED_SENTIMENT_DATE] = None
 
 
-class EmisDocumentApp:
-    """Main application class."""
+class DocumentFetcher:
+    """Handles document fetching from EMIS API."""
 
     def __init__(self):
-        self.session_manager = SessionStateManager()
-        self.ui_components = UIComponents()
-        self.document_analyzer = DocumentAnalyzer()
-        self.document_filter = DocumentFilter()
-        self.emis_client = None
-        self.session_manager.initialize()
+        self.api_token = os.getenv("EMIS_DOCUMENTS_API_KEY")
 
-    @st.cache_resource(ttl=3600)
-    def _get_emis_client(_self, api_token: str):
-        from emis_api import EmisDocuments
+    def fetch_documents(self, country_code: str, series_name: str, 
+                       start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
+        """
+        Fetch documents from EMIS API with pagination.
+        
+        Args:
+            country_code: Country identifier
+            series_name: Name of the series to search for
+            start_date: Start date for document search
+            end_date: End date for document search
+            
+        Returns:
+            List of document dictionaries
+            
+        Raises:
+            DataFetchError: If API request fails
+        """
+        if not self.api_token:
+            raise DataFetchError("EMIS API token not found")
 
-        try:
-            return EmisDocuments(api_key=api_token)
-        except Exception as e:
-            logger.error(f"Failed to initialize EMIS client: {e}")
-            raise
-
-    def run(self) -> None:
-        if not st.session_state.logged_in:
-            self._render_login_page()
-        else:
-            self._render_main_app()
-
-    def _render_login_page(self) -> None:
-        st.title("Login to EMIS Document Analyzer")
-        self.ui_components.render_logo()
-        with st.form("login_form"):
-            emis_token = st.text_input("EMIS API Token", type="password")
-            if st.form_submit_button("Login"):
-                self._handle_login(emis_token)
-
-    def _handle_login(self, emis_token: str) -> None:
-        if not emis_token:
-            st.error("Please enter the EMIS API Token.")
-            return
-        try:
-            st.session_state.emis_api_token = emis_token
-            self.emis_client = self._get_emis_client(emis_token)
-            st.session_state.logged_in = True
-            st.success("Login successful!")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Login failed: {e}")
-            st.session_state.emis_api_token = None
-            st.session_state.logged_in = False
-
-    def _render_main_app(self) -> None:
-        self.ui_components.load_css()
-        self.ui_components.render_logo()
-        if not self._ensure_client_initialized():
-            return
-
-        search_params = self.ui_components.render_search_filters()
-        if st.sidebar.button("Search EMIS Documents", type="primary"):
-            self._handle_search(search_params)
-
-        self._render_results()
-        self._render_logout_button()
-
-    def _ensure_client_initialized(self) -> bool:
-        if self.emis_client is None:
-            current_token = st.session_state.get("emis_api_token")
-            if st.session_state.logged_in and current_token:
-                try:
-                    self.emis_client = self._get_emis_client(current_token)
-                    return True
-                except Exception as e:
-                    st.error(
-                        f"Client re-initialization failed: {e}. Please log out and in again."
-                    )
-                    self.session_manager.logout()
-                    st.rerun()
-                    return False
-            else:
-                self.session_manager.logout()
-                st.rerun()
-                return False
-        return True
-
-    def _handle_search(self, search_params: SearchParameters) -> None:
-        if not any(
-            [
-                search_params.country_name,
-                search_params.company_name,
-                search_params.industry_name,
-                search_params.keyword,
-            ]
-        ):
-            st.warning("Please provide at least one search criterion.")
-            return
-
-        self.session_manager.reset_search_data()
-        parts = [
-            f"about '{p}'"
-            for p in [
-                search_params.company_name,
-                search_params.country_name,
-                search_params.industry_name,
-                search_params.keyword,
-            ]
-            if p
-        ]
-        spinner_text = f"Searching for documents {' and '.join(parts)}..."
-
-        with st.spinner(spinner_text):
+        all_documents = []
+        
+        for page in range(Config.MAX_DOCUMENTS_PAGES):
+            offset = page * Config.DOCUMENTS_PER_PAGE
+            
+            params = {
+                "start_date": start_date.strftime('%Y-%m-%d'),
+                "end_date": end_date.strftime('%Y-%m-%d'),
+                "keyword": series_name,
+                "country": country_code,
+                "order": "date",
+                "limit": Config.DOCUMENTS_PER_PAGE,
+                "offset": offset,
+                "token": self.api_token
+            }
+            
             try:
-                result = self.emis_client.run(**vars(search_params))
-                self._store_search_results(result, search_params)
-            except Exception as e:
-                st.error(f"Error during EMIS search: {e}")
-                logger.error(f"Search error: {e}")
+                response = requests.get(Config.EMIS_API_URL, params=params, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+                
+                documents_page = data.get('data', {}).get('items', [])
+                if not documents_page:
+                    break
+                    
+                all_documents.extend(documents_page)
+                
+            except requests.exceptions.RequestException as e:
+                raise DataFetchError(f"API request failed: {e}")
 
-    def _store_search_results(
-        self, result: Dict[str, Any], search_params: SearchParameters
-    ) -> None:
-        st.session_state.result = result["documents"]
-        st.session_state.search_info = {
-            **vars(search_params),
-            **{
-                k: result.get(k)
-                for k in [
-                    "country_code",
-                    "company_id",
-                    "matched_company_name",
-                    "industry_code",
-                ]
-            },
-        }
+        return all_documents
 
-    # --- MÉTODO MODIFICADO ---
-    def _render_results(self) -> None:
-        """Render search results, including analysis and filtered document list."""
-        if st.session_state.result is None:
-            return
 
-        documents = st.session_state.result
-        if st.session_state.search_info:
-            self.ui_components.render_search_info(st.session_state.search_info)
+class SentimentAnalyzer:
+    """Handles sentiment analysis operations."""
 
+    def __init__(self):
+        self.analyzer = SentimentIntensityAnalyzer()
+
+    def analyze_documents(self, documents: List[Dict[str, Any]]) -> pd.DataFrame:
+        """
+        Analyze sentiment of documents and return aggregated results.
+        
+        Args:
+            documents: List of document dictionaries
+            
+        Returns:
+            DataFrame with daily sentiment scores
+            
+        Raises:
+            SentimentAnalysisError: If analysis fails
+        """
         if not documents:
-            st.info("No documents found for the given criteria.")
+            return pd.DataFrame()
+
+        sentiment_results = []
+        
+        for doc in documents:
+            text = self._extract_text_from_document(doc)
+            if not text:
+                continue
+                
+            score = self._calculate_sentiment_score(text)
+            if self._is_valid_sentiment_score(score):
+                sentiment_results.append({
+                    "date": doc.get("creationDate"),
+                    "sentiment_score": score,
+                    "title": doc.get('title', '')[:Config.MAX_TITLE_LENGTH] + "..."
+                })
+
+        if not sentiment_results:
+            return pd.DataFrame()
+
+        return self._aggregate_sentiment_by_date(sentiment_results)
+
+    def _extract_text_from_document(self, doc: Dict[str, Any]) -> str:
+        """Extract meaningful text from document."""
+        title = doc.get('title', '')
+        abstract = doc.get('abstract', '')
+        text = f"{title}. {abstract}".strip()
+        return text if text != '.' else ''
+
+    def _calculate_sentiment_score(self, text: str) -> float:
+        """Calculate sentiment score for text."""
+        scores = self.analyzer.polarity_scores(text)
+        return scores['compound']
+
+    def _is_valid_sentiment_score(self, score: float) -> bool:
+        """Validate sentiment score is within expected range."""
+        return -1 <= score <= 1
+
+    def _aggregate_sentiment_by_date(self, sentiment_results: List[Dict[str, Any]]) -> pd.DataFrame:
+        """Aggregate sentiment scores by date."""
+        df = pd.DataFrame(sentiment_results)
+        df['date'] = pd.to_datetime(df['date']).dt.date
+        
+        df_grouped = df.groupby('date').agg({
+            'sentiment_score': 'mean',
+            'title': 'count'
+        }).reset_index()
+        
+        df_grouped.rename(columns={'title': 'doc_count'}, inplace=True)
+        
+        # Validate final results
+        if (df_grouped['sentiment_score'].max() > 1 or 
+            df_grouped['sentiment_score'].min() < -1):
+            raise SentimentAnalysisError("Sentiment scores outside valid range")
+        
+        return df_grouped
+
+
+class ContextAnalyzer:
+    """Handles context analysis operations."""
+
+    def __init__(self):
+        self.document_fetcher = DocumentFetcher()
+        self.sentiment_analyzer = SentimentAnalyzer()
+
+    def perform_analysis(self, visualizer: SeriesVisualizer, 
+                        start_date: datetime, end_date: datetime) -> None:
+        """
+        Perform complete context analysis including document fetching and sentiment analysis.
+        
+        Args:
+            visualizer: SeriesVisualizer instance
+            start_date: Analysis start date
+            end_date: Analysis end date
+        """
+        SeriesDataManager.clear_analysis_data()
+        
+        with st.spinner("Iniciando búsqueda de documentos..."):
+            try:
+                # Extract metadata
+                meta = visualizer.metadata
+                country_code = self._extract_country_code(meta)
+                series_name = self._extract_series_name(meta)
+                
+                if not all([country_code, series_name]):
+                    st.error("Faltan datos (país, nombre de serie) para la búsqueda.")
+                    return
+
+                # Fetch documents
+                documents = self._fetch_documents_with_progress(
+                    country_code, series_name, start_date, end_date
+                )
+                
+                if not documents:
+                    st.warning(f"No se encontraron documentos para '{series_name}' "
+                              f"en {country_code} en las fechas seleccionadas.")
+                    return
+
+                # Analyze sentiment
+                sentiment_df = self._analyze_sentiment_with_progress(documents)
+                
+                # Store results
+                st.session_state[SessionStateKeys.RAW_DOCUMENTS] = documents
+                st.session_state[SessionStateKeys.SENTIMENT_DF] = sentiment_df
+                
+                st.success(f"Análisis completado. Se procesaron {len(documents)} "
+                          f"documentos en {len(sentiment_df)} días.")
+                
+            except (DataFetchError, SentimentAnalysisError) as e:
+                st.error(f"Error durante el análisis: {e}")
+            except Exception as e:
+                st.error(f"Ocurrió un error inesperado durante el análisis: {e}")
+                st.error(traceback.format_exc())
+
+    def _extract_country_code(self, meta) -> Optional[str]:
+        """Extract country code from metadata."""
+        return getattr(meta.country, 'id', None) if hasattr(meta, 'country') else None
+
+    def _extract_series_name(self, meta) -> Optional[str]:
+        """Extract series name from metadata."""
+        return getattr(meta, 'name', None)
+
+    def _fetch_documents_with_progress(self, country_code: str, series_name: str,
+                                     start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
+        """Fetch documents with progress indication."""
+        spinner = st.spinner("Buscando documentos...")
+        with spinner:
+            documents = self.document_fetcher.fetch_documents(
+                country_code, series_name, start_date, end_date
+            )
+            spinner.text = f"Encontrados {len(documents)} documentos"
+            return documents
+
+    def _analyze_sentiment_with_progress(self, documents: List[Dict[str, Any]]) -> pd.DataFrame:
+        """Analyze sentiment with progress indication."""
+        with st.spinner(f"Analizando {len(documents)} documentos..."):
+            return self.sentiment_analyzer.analyze_documents(documents)
+
+
+class ChartRenderer:
+    """Handles chart rendering operations."""
+
+    @staticmethod
+    def render_sentiment_chart(df: pd.DataFrame) -> None:
+        """Render sentiment analysis chart with click events."""
+        st.subheader("Análisis de Sentimiento de Noticias")
+        st.info("Haz clic en un punto del gráfico para ver los documentos de esa fecha.")
+
+        if df.empty:
+            st.info("El análisis de contexto se ejecutó, pero no hay datos para mostrar.")
             return
 
-        st.subheader(f"Search Results ({len(documents)} documents found)")
+        ChartRenderer._validate_sentiment_dataframe(df)
+        ChartRenderer._display_sentiment_metrics(df)
+        ChartRenderer._show_sentiment_chart_with_events(df)
 
-        # --- NUEVA ESTRUCTURA ---
-        with st.container(border=True):
-            st.header("Results Analysis")
-            self._render_general_analysis_section(documents)
-            st.markdown("---")
-            self.ui_components.render_topics_industries_charts(documents)
+    @staticmethod
+    def _validate_sentiment_dataframe(df: pd.DataFrame) -> None:
+        """Validate sentiment DataFrame structure."""
+        if "sentiment_score" not in df.columns:
+            st.error("❌ No se encontró la columna 'sentiment_score' en el DataFrame.")
+            st.write("Columnas disponibles:", df.columns.tolist())
+            raise ValueError("Invalid DataFrame structure")
 
-        self._render_individual_documents_section(documents)
+    @staticmethod
+    def _display_sentiment_metrics(df: pd.DataFrame) -> None:
+        """Display sentiment analysis metrics."""
+        st.write("**Información del DataFrame de Sentimientos:**")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Días totales", len(df))
+        with col2:
+            st.metric("Sentimiento mín", f"{df['sentiment_score'].min():.3f}")
+        with col3:
+            st.metric("Sentimiento máx", f"{df['sentiment_score'].max():.3f}")
+        with col4:
+            st.metric("Sentimiento promedio", f"{df['sentiment_score'].mean():.3f}")
 
-    def _render_general_analysis_section(self, documents: List[Dict[str, Any]]) -> None:
-        if st.button("Make General Sentiment Analysis"):
-            with st.spinner("Analyzing all documents..."):
-                df = self.document_analyzer.analyze_documents(documents)
-                st.session_state.general_analysis_df = df if not df.empty else None
+        with st.expander("Ver muestra de datos"):
+            st.write(df.head(10))
 
-        if st.session_state.general_analysis_df is not None:
-            self.ui_components.render_sentiment_charts(
-                st.session_state.general_analysis_df
+    @staticmethod
+    def _show_sentiment_chart_with_events(df: pd.DataFrame) -> None:
+        """Show sentiment chart and handle click events."""
+        fig = px.line(
+            df,
+            x="date",
+            y="sentiment_score",
+            title="Evolución del Sentimiento Promedio Diario",
+            labels={"date": "Fecha", "sentiment_score": "Sentimiento Promedio"},
+            markers=True
+        )
+
+        # Add reference lines
+        fig.add_hline(y=0, line_width=2, line_dash="dash", 
+                     line_color="gray", annotation_text="Neutral")
+        fig.add_hline(y=0.5, line_width=1, line_dash="dot", 
+                     line_color="green", annotation_text="Positivo")
+        fig.add_hline(y=-0.5, line_width=1, line_dash="dot", 
+                     line_color="red", annotation_text="Negativo")
+
+        # Set VADER range and layout
+        fig.update_layout(yaxis=dict(range=[-1.1, 1.1]), title_x=0.5)
+
+        # Capture clicks
+        selected_points = plotly_events(fig, click_event=True, 
+                                      key="sentiment_chart_click")
+
+        if selected_points:
+            ChartRenderer._handle_chart_click(selected_points[0])
+
+    @staticmethod
+    def _handle_chart_click(selected_point: Dict[str, Any]) -> None:
+        """Handle chart click event."""
+        clicked_date_str = selected_point['x']
+        clicked_date = datetime.strptime(clicked_date_str, '%Y-%m-%d').date()
+        
+        if st.session_state[SessionStateKeys.SELECTED_SENTIMENT_DATE] != clicked_date:
+            st.session_state[SessionStateKeys.SELECTED_SENTIMENT_DATE] = clicked_date
+            st.rerun()
+
+
+class DocumentRenderer:
+    """Handles document display operations."""
+
+    @staticmethod
+    def render_documents_for_date(documents: List[Dict[str, Any]], 
+                                selected_date: datetime.date) -> None:
+        """Render documents for a specific date."""
+        st.subheader(f"Documentos del {selected_date.strftime('%Y-%m-%d')}")
+
+        filtered_documents = DocumentRenderer._filter_documents_by_date(
+            documents, selected_date
+        )
+
+        if not filtered_documents:
+            st.warning("No se encontraron documentos para esta fecha.")
+            return
+
+        DocumentRenderer._display_documents(filtered_documents)
+
+    @staticmethod
+    def _filter_documents_by_date(documents: List[Dict[str, Any]], 
+                                target_date: datetime.date) -> List[Dict[str, Any]]:
+        """Filter documents by specific date."""
+        filtered_documents = []
+        
+        for doc in documents:
+            doc_date = pd.to_datetime(doc.get("creationDate")).date()
+            if doc_date == target_date:
+                filtered_documents.append(doc)
+        
+        return filtered_documents
+
+    @staticmethod
+    def _display_documents(documents: List[Dict[str, Any]]) -> None:
+        """Display documents in expandable sections."""
+        for doc in documents:
+            title = doc.get('title', 'Sin Título')
+            
+            with st.expander(f"**{title}**"):
+                source_name = doc.get('source', {}).get('name', 'N/A')
+                source_type = doc.get('sourceType', {}).get('name', 'N/A')
+                
+                st.caption(f"Fuente: {source_name} | Tipo: {source_type}")
+                st.markdown(doc.get('abstract', 'Sin resumen disponible.'))
+                
+                if link := doc.get('publicationLink'):
+                    st.link_button("Leer noticia original", link)
+
+
+class MetadataRenderer:
+    """Handles metadata display operations."""
+
+    @staticmethod
+    def render_metadata(meta) -> None:
+        """Render series metadata in a structured format."""
+        st.subheader("Metadatos de la Serie")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.metric(label="Nombre de la Serie", 
+                     value=getattr(meta, 'name', 'N/A'))
+            st.metric(label="País", 
+                     value=getattr(meta.country, 'name', 'N/A') 
+                           if hasattr(meta, 'country') else 'N/A')
+            st.metric(label="Fuente", 
+                     value=getattr(meta.source, 'name', 'N/A') 
+                           if hasattr(meta, 'source') else 'N/A')
+        
+        with col2:
+            st.metric(label="ID de la Serie", 
+                     value=str(getattr(meta, 'id', 'N/A')))
+            st.metric(label="Frecuencia", 
+                     value=getattr(meta.frequency, 'name', 'N/A') 
+                           if hasattr(meta, 'frequency') else 'N/A')
+            st.metric(label="Última Actualización", 
+                     value=str(getattr(meta, 'last_update_time', 'N/A')))
+        
+        st.markdown("---")
+
+
+class SeriesChartRenderer:
+    """Handles series chart rendering operations."""
+
+    @staticmethod
+    def render_series_chart(df: pd.DataFrame, meta) -> Tuple[Optional[datetime.date], Optional[datetime.date]]:
+        """
+        Render series chart with date selection.
+        
+        Returns:
+            Tuple of (start_date, end_date) or (None, None) if invalid
+        """
+        st.subheader("Gráfico de la Serie (Datos Revisados)")
+        
+        min_date = df["Date"].min().date()
+        max_date = df["Date"].max().date()
+        
+        # Date selection
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            start_date = st.date_input(
+                "Fecha de Inicio", 
+                value=min_date, 
+                min_value=min_date, 
+                max_value=max_date, 
+                key="date_start"
+            )
+        
+        with col2:
+            end_date = st.date_input(
+                "Fecha de Fin", 
+                value=max_date, 
+                min_value=min_date, 
+                max_value=max_date, 
+                key="date_end"
             )
 
-    # --- MÉTODO MODIFICADO ---
-    def _render_individual_documents_section(
-        self, documents: List[Dict[str, Any]]
-    ) -> None:
-        """Render individual documents section with interactive filters."""
-        st.header("Document Details & Filters")
+        # Validate date range
+        if start_date > end_date:
+            st.error("La fecha de inicio no puede ser posterior a la fecha de fin.")
+            return None, None
 
-        filtered_docs = self._apply_document_filters(documents)
+        # Filter and display data
+        df_filtered = df[
+            (df["Date"].dt.date >= start_date) & 
+            (df["Date"].dt.date <= end_date)
+        ]
 
-        st.info(
-            f"Showing {len(filtered_docs)} of {len(documents)} documents based on active filters."
+        if not df_filtered.empty:
+            SeriesChartRenderer._display_chart(df_filtered, meta)
+        else:
+            st.warning("No hay datos disponibles en el rango de fechas seleccionado.")
+
+        return start_date, end_date
+
+    @staticmethod
+    def _display_chart(df: pd.DataFrame, meta) -> None:
+        """Display the actual chart."""
+        fig = px.line(
+            df, 
+            x="Date", 
+            y="Value", 
+            title=getattr(meta, 'name', 'Gráfico de la Serie'),
+            labels={"Date": "Fecha", "Value": "Valor"}, 
+            markers=True
         )
-        self._render_document_list(filtered_docs)
+        
+        fig.update_layout(title_x=0.5)
+        st.plotly_chart(fig, use_container_width=True)
 
-    def _apply_document_filters(
-        self, documents: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """Apply all available filters and return the filtered list."""
-        filtered_docs = documents
 
-        topic_df = self.document_filter.extract_and_count_tags(documents, "topics")
-        industry_df = self.document_filter.extract_and_count_tags(
-            documents, "industries"
+class MainApplication:
+    """Main application controller."""
+
+    def __init__(self):
+        self.context_analyzer = ContextAnalyzer()
+
+    def render_sidebar(self) -> Optional[str]:
+        """Render sidebar and return series ID input."""
+        st.sidebar.image(Config.LOGO_PATH, width=Config.SIDEBAR_LOGO_WIDTH)
+        st.sidebar.title("Opciones")
+        
+        series_id_input = st.sidebar.text_input(
+            "Introduce el ID de la Serie", 
+            help="Ej: 193568001"
         )
+        
+        return series_id_input
 
-        col1, col2, col3 = st.columns(3)
+    def render_main_content(self) -> None:
+        """Render main application content."""
+        st.title("Explorador de Datos de Series Temporales")
+        st.markdown("Introduce el ID de una serie para cargar sus metadatos y visualizar su gráfico.")
 
-        with col1:
-            if not topic_df.empty:
-                options = ["All Topics"] + topic_df["name"].tolist()
-                selected = st.selectbox("Filter by Topic:", options=options)
-                filtered_docs = self.document_filter.filter_documents_by_tag(
-                    filtered_docs, selected, "topics"
-                )
-        with col2:
-            if not industry_df.empty:
-                options = ["All Industries"] + industry_df["name"].tolist()
-                selected = st.selectbox("Filter by Industry:", options=options)
-                filtered_docs = self.document_filter.filter_documents_by_tag(
-                    filtered_docs, selected, "industries"
-                )
-        with col3:
-            # Dates are filtered based on the already-filtered documents for better context
-            unique_dates = self.document_filter.extract_unique_dates(filtered_docs)
-            if unique_dates:
-                options = ["All Dates"] + unique_dates
-                selected = st.selectbox("Filter by Date:", options=options)
-                filtered_docs = self.document_filter.filter_documents_by_date(
-                    filtered_docs, selected
-                )
+        series_id_input = self.render_sidebar()
 
-        return filtered_docs
+        # Handle series loading
+        if st.sidebar.button("Cargar Datos de la Serie"):
+            self._handle_series_load(series_id_input)
 
-    def _render_document_list(self, documents: List[Dict[str, Any]]) -> None:
-        if not documents:
-            st.warning("No documents match the current filter criteria.")
-            return
+        # Display series data if available
+        visualizer = st.session_state.get(SessionStateKeys.VISUALIZER_OBJECT)
+        if visualizer:
+            self._display_series_content(visualizer)
 
-        for idx, doc in enumerate(documents):
-            self._render_single_document(doc, idx)
-            if idx < len(documents) - 1:
-                st.markdown(
-                    """<hr style="height: 2px; background-color: #e0e0e0;">""",
-                    unsafe_allow_html=True,
-                )
+        # Display sentiment analysis results
+        self._display_sentiment_results()
 
-    def _render_single_document(self, doc: Dict[str, Any], idx: int) -> None:
-        doc_id, title, date, abstract = (
-            doc.get("id"),
-            doc.get("title"),
-            doc.get("date"),
-            doc.get("abstract", ""),
-        )
-        with st.container(border=True):
-            st.markdown(f"**Title:** {title}")
-            st.caption(f"Document ID: {doc_id} | Date: {date}")
-            with st.expander("Abstract"):
-                st.write(abstract or "No abstract available.")
-            if st.button("Analyze Sentiment", key=f"analyse_{idx}_{doc_id}"):
-                text_to_analyze = f"{title}. {abstract}"
-                with st.spinner("Analyzing..."):
-                    analysis_result = (
-                        self.document_analyzer.sentiment_analyzer.analyze_text(
-                            text_to_analyze
-                        )
+    def _handle_series_load(self, series_id_input: str) -> None:
+        """Handle series loading button click."""
+        if series_id_input:
+            SeriesDataManager.clear_analysis_data()
+            SeriesDataManager.load_series(series_id_input)
+        else:
+            st.warning("Por favor, introduce un ID de serie.")
+
+    def _display_series_content(self, visualizer: SeriesVisualizer) -> None:
+        """Display series metadata, chart, and analysis options."""
+        if visualizer.metadata:
+            MetadataRenderer.render_metadata(visualizer.metadata)
+
+        df_series = visualizer.process_series_data()
+
+        if df_series is not None and not df_series.empty:
+            start_date, end_date = SeriesChartRenderer.render_series_chart(
+                df_series, visualizer.metadata
+            )
+
+            st.markdown("---")
+            st.subheader("Análisis Adicional")
+            
+            if st.button("Context analysis"):
+                if start_date and end_date:
+                    self.context_analyzer.perform_analysis(
+                        visualizer, 
+                        datetime.combine(start_date, datetime.min.time()),
+                        datetime.combine(end_date, datetime.min.time())
                     )
-                self.ui_components.render_sentiment_result(analysis_result)
 
-    def _render_logout_button(self) -> None:
-        with st.sidebar:
-            if st.button("Logout"):
-                self._handle_logout()
+        elif df_series is not None:
+            st.info("La serie seleccionada no contiene puntos de datos para graficar.")
 
-    def _handle_logout(self) -> None:
-        if current_token := st.session_state.get("emis_api_token"):
-            self._get_emis_client.clear(api_token=current_token)
-        self.session_manager.logout()
-        self.emis_client = None
-        st.rerun()
+    def _display_sentiment_results(self) -> None:
+        """Display sentiment analysis results and related documents."""
+        sentiment_df = st.session_state.get(SessionStateKeys.SENTIMENT_DF)
+        if sentiment_df is not None:
+            ChartRenderer.render_sentiment_chart(sentiment_df)
+
+        selected_date = st.session_state.get(SessionStateKeys.SELECTED_SENTIMENT_DATE)
+        if selected_date:
+            documents = st.session_state.get(SessionStateKeys.RAW_DOCUMENTS, [])
+            DocumentRenderer.render_documents_for_date(documents, selected_date)
 
 
-if __name__ == "__main__":
-    EmisDocumentApp().run()
+def main():
+    """Main application entry point."""
+    # Initialize application
+    AppInitializer.setup_page_config()
+    AppInitializer.initialize_session_state()
+    AppInitializer.download_nltk_resources()
+
+    # Handle authentication and main app
+    if st.session_state[SessionStateKeys.LOGGED_IN]:
+        Ceic.set_server("https://api.ceicdata.com/v2")
+        app = MainApplication()
+        app.render_main_content()
+    else:
+        AuthenticationManager.render_login_page()
+
+
+if __name__ == '__main__':
+    main()
