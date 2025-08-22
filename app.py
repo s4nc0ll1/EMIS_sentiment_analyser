@@ -53,6 +53,7 @@ class SessionStateKeys:
     SHOW_SOURCES_COMPARISON = 'show_sources_comparison' 
     SELECTED_START_DATE = 'selected_start_date'
     SELECTED_END_DATE = 'selected_end_date'
+    SHOW_ALL_DATA = 'show_all_data'
 
 
 class AuthenticationError(Exception):
@@ -173,7 +174,8 @@ class AppInitializer:
             SessionStateKeys.SELECTED_SENTIMENT_DATE: None,
             SessionStateKeys.SHOW_SOURCES_COMPARISON: False,
             SessionStateKeys.SELECTED_START_DATE: None,
-            SessionStateKeys.SELECTED_END_DATE: None
+            SessionStateKeys.SELECTED_END_DATE: None,
+            SessionStateKeys.SHOW_ALL_DATA: False
         }
         
         for key, default_value in default_values.items():
@@ -679,6 +681,17 @@ class SeriesChartRenderer:
         
         min_date = df["Date"].min().date()
         max_date = df["Date"].max().date()
+
+        if st.session_state.get(SessionStateKeys.SHOW_ALL_DATA, False):
+            # Si el usuario quiere ver todos los datos, la fecha de inicio es la mínima
+            default_start_date = min_date
+        else:
+            # Por defecto, mostrar los últimos 40 puntos de datos
+            if len(df) > 40:
+                default_start_date = df.tail(40)["Date"].min().date()
+            else:
+                # Si hay menos de 40 puntos, mostrarlos todos
+                default_start_date = min_date
         
         # Date selection
         col1, col2 = st.columns(2)
@@ -686,7 +699,7 @@ class SeriesChartRenderer:
         with col1:
             start_date = st.date_input(
                 "Fecha de Inicio", 
-                value=min_date, 
+                value=default_start_date, # Usar el valor por defecto calculado
                 min_value=min_date, 
                 max_value=max_date, 
                 key="date_start"
@@ -827,7 +840,9 @@ class MainApplication:
             "Introduce el ID de la Serie", 
             help="Ej: 193568001"
         )
-        
+
+        st.sidebar.checkbox("All data", key=SessionStateKeys.SHOW_ALL_DATA)
+
         return series_id_input
 
     def render_main_content(self) -> None:
