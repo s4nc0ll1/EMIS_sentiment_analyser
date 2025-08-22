@@ -50,7 +50,9 @@ class SessionStateKeys:
     SENTIMENT_DF = 'sentiment_df'
     RAW_DOCUMENTS = 'raw_documents'
     SELECTED_SENTIMENT_DATE = 'selected_sentiment_date'
-    SHOW_SOURCES_COMPARISON = 'show_sources_comparison'  # New state key
+    SHOW_SOURCES_COMPARISON = 'show_sources_comparison' 
+    SELECTED_START_DATE = 'selected_start_date'
+    SELECTED_END_DATE = 'selected_end_date'
 
 
 class AuthenticationError(Exception):
@@ -169,7 +171,9 @@ class AppInitializer:
             SessionStateKeys.SENTIMENT_DF: None,
             SessionStateKeys.RAW_DOCUMENTS: [],
             SessionStateKeys.SELECTED_SENTIMENT_DATE: None,
-            SessionStateKeys.SHOW_SOURCES_COMPARISON: False  # New default value
+            SessionStateKeys.SHOW_SOURCES_COMPARISON: False,
+            SessionStateKeys.SELECTED_START_DATE: None,
+            SessionStateKeys.SELECTED_END_DATE: None
         }
         
         for key, default_value in default_values.items():
@@ -265,6 +269,8 @@ class SeriesDataManager:
         st.session_state[SessionStateKeys.SENTIMENT_DF] = None
         st.session_state[SessionStateKeys.RAW_DOCUMENTS] = []
         st.session_state[SessionStateKeys.SELECTED_SENTIMENT_DATE] = None
+        st.session_state[SessionStateKeys.SELECTED_START_DATE] = None
+        st.session_state[SessionStateKeys.SELECTED_END_DATE] = None
 
 
 # COMMENTED CODE: Original document fetching and sentiment analysis logic
@@ -861,9 +867,21 @@ class MainApplication:
         if df_series is not None and not df_series.empty:
             # Check if we should show sources comparison or regular series chart
             if st.session_state.get(SessionStateKeys.SHOW_SOURCES_COMPARISON, False):
-                # Show sources comparison chart
-                SourcesComparisonRenderer.render_sources_comparison_chart(df_series)
-                
+                start_date_saved = st.session_state.get(SessionStateKeys.SELECTED_START_DATE)
+                end_date_saved = st.session_state.get(SessionStateKeys.SELECTED_END_DATE)
+
+                # Filtrar el DataFrame principal con las fechas guardadas
+                if start_date_saved and end_date_saved:
+                    df_filtered_comparison = df_series[
+                        (df_series["Date"].dt.date >= start_date_saved) & 
+                        (df_series["Date"].dt.date <= end_date_saved)
+                    ]
+                else:
+                    # Si no hay fechas, usa el DataFrame completo como respaldo
+                    df_filtered_comparison = df_series
+
+                # Show sources comparison chart con los datos ya filtrados
+                SourcesComparisonRenderer.render_sources_comparison_chart(df_filtered_comparison)
                 # Add button to go back to original chart
                 if st.button("Back"):
                     st.session_state[SessionStateKeys.SHOW_SOURCES_COMPARISON] = False
@@ -880,6 +898,8 @@ class MainApplication:
                 # Modified context analysis button - now shows sources comparison
                 if st.button("Context analysis"):
                     if start_date and end_date:
+                        st.session_state[SessionStateKeys.SELECTED_START_DATE] = start_date
+                        st.session_state[SessionStateKeys.SELECTED_END_DATE] = end_date
                         # Instead of performing the original analysis, show sources comparison
                         st.session_state[SessionStateKeys.SHOW_SOURCES_COMPARISON] = True
                         st.success("¡Análisis de contexto iniciado! Mostrando comparación de fuentes.")
