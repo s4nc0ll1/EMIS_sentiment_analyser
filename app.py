@@ -279,224 +279,221 @@ class SeriesDataManager:
 # This code was used for fetching documents from EMIS API and performing sentiment analysis
 # We're keeping it commented for future reference
 
-# class DocumentFetcher:
-#     """Handles document fetching from EMIS API."""
-# 
-#     def __init__(self):
-#         self.api_token = os.getenv("EMIS_DOCUMENTS_API_KEY")
-# 
-#     def fetch_documents(self, country_code: str, series_name: str, 
-#                        start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
-#         """
-#         Fetch documents from EMIS API with pagination.
-#         
-#         Args:
-#             country_code: Country identifier
-#             series_name: Name of the series to search for
-#             start_date: Start date for document search
-#             end_date: End date for document search
-#             
-#         Returns:
-#             List of document dictionaries
-#             
-#         Raises:
-#             DataFetchError: If API request fails
-#         """
-#         if not self.api_token:
-#             raise DataFetchError("EMIS API token not found")
-# 
-#         all_documents = []
-#         
-#         for page in range(Config.MAX_DOCUMENTS_PAGES):
-#             offset = page * Config.DOCUMENTS_PER_PAGE
-#             
-#             params = {
-#                 "start_date": start_date.strftime('%Y-%m-%d'),
-#                 "end_date": end_date.strftime('%Y-%m-%d'),
-#                 "keyword": series_name,
-#                 "country": country_code,
-#                 "order": "date",
-#                 "limit": Config.DOCUMENTS_PER_PAGE,
-#                 "offset": offset,
-#                 "token": self.api_token
-#             }
-#             
-#             try:
-#                 response = requests.get(Config.EMIS_API_URL, params=params, timeout=30)
-#                 response.raise_for_status()
-#                 data = response.json()
-#                 
-#                 documents_page = data.get('data', {}).get('items', [])
-#                 if not documents_page:
-#                     break
-#                     
-#                 all_documents.extend(documents_page)
-#                 
-#             except requests.exceptions.RequestException as e:
-#                 raise DataFetchError(f"API request failed: {e}")
-# 
-#         return all_documents
+class DocumentFetcher:
+    """Handles document fetching from EMIS API."""
 
+    def __init__(self):
+        self.api_token = os.getenv("EMIS_DOCUMENTS_API_KEY")
+ 
+    def fetch_documents(self, country_code: str, series_name: str, 
+                    start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
+        """
+        Fetch documents from EMIS API with pagination.
+        
+        Args:
+            country_code: Country identifier
+            series_name: Name of the series to search for
+            start_date: Start date for document search
+            end_date: End date for document search
+            
+        Returns:
+            List of document dictionaries
+            
+        Raises:
+            DataFetchError: If API request fails
+        """
+        if not self.api_token:
+            raise DataFetchError("EMIS API token not found")
 
-# class SentimentAnalyzer:
-#     """Handles sentiment analysis operations."""
-# 
-#     def __init__(self):
-#         self.analyzer = SentimentIntensityAnalyzer()
-# 
-#     def analyze_documents(self, documents: List[Dict[str, Any]]) -> pd.DataFrame:
-#         """
-#         Analyze sentiment of documents and return aggregated results.
-#         
-#         Args:
-#             documents: List of document dictionaries
-#             
-#         Returns:
-#             DataFrame with daily sentiment scores
-#             
-#         Raises:
-#             SentimentAnalysisError: If analysis fails
-#         """
-#         if not documents:
-#             return pd.DataFrame()
-# 
-#         sentiment_results = []
-#         
-#         for doc in documents:
-#             text = self._extract_text_from_document(doc)
-#             if not text:
-#                 continue
-#                 
-#             score = self._calculate_sentiment_score(text)
-#             if self._is_valid_sentiment_score(score):
-#                 sentiment_results.append({
-#                     "date": doc.get("creationDate"),
-#                     "sentiment_score": score,
-#                     "title": doc.get('title', '')[:Config.MAX_TITLE_LENGTH] + "..."
-#                 })
-# 
-#         if not sentiment_results:
-#             return pd.DataFrame()
-# 
-#         return self._aggregate_sentiment_by_date(sentiment_results)
-# 
-#     def _extract_text_from_document(self, doc: Dict[str, Any]) -> str:
-#         """Extract meaningful text from document."""
-#         title = doc.get('title', '')
-#         abstract = doc.get('abstract', '')
-#         text = f"{title}. {abstract}".strip()
-#         return text if text != '.' else ''
-# 
-#     def _calculate_sentiment_score(self, text: str) -> float:
-#         """Calculate sentiment score for text."""
-#         scores = self.analyzer.polarity_scores(text)
-#         return scores['compound']
-# 
-#     def _is_valid_sentiment_score(self, score: float) -> bool:
-#         """Validate sentiment score is within expected range."""
-#         return -1 <= score <= 1
-# 
-#     def _aggregate_sentiment_by_date(self, sentiment_results: List[Dict[str, Any]]) -> pd.DataFrame:
-#         """Aggregate sentiment scores by date."""
-#         df = pd.DataFrame(sentiment_results)
-#         df['date'] = pd.to_datetime(df['date']).dt.date
-#         
-#         df_grouped = df.groupby('date').agg({
-#             'sentiment_score': 'mean',
-#             'title': 'count'
-#         }).reset_index()
-#         
-#         df_grouped.rename(columns={'title': 'doc_count'}, inplace=True)
-#         
-#         # Validate final results
-#         if (df_grouped['sentiment_score'].max() > 1 or 
-#             df_grouped['sentiment_score'].min() < -1):
-#             raise SentimentAnalysisError("Sentiment scores outside valid range")
-#         
-#         return df_grouped
+        all_documents = []
+        
+        for page in range(Config.MAX_DOCUMENTS_PAGES):
+            offset = page * Config.DOCUMENTS_PER_PAGE
+            
+            params = {
+                "start_date": start_date.strftime('%Y-%m-%d'),
+                "end_date": end_date.strftime('%Y-%m-%d'),
+                "keyword": series_name,
+                "country": country_code,
+                "order": "date",
+                "limit": Config.DOCUMENTS_PER_PAGE,
+                "offset": offset,
+                "token": self.api_token
+            }
+            
+            try:
+                response = requests.get(Config.EMIS_API_URL, params=params, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+                
+                documents_page = data.get('data', {}).get('items', [])
+                if not documents_page:
+                    break
+                    
+                all_documents.extend(documents_page)
+                
+            except requests.exceptions.RequestException as e:
+                raise DataFetchError(f"API request failed: {e}")
 
+        return all_documents
 
-# class ContextAnalyzer:
-#     """Handles context analysis operations."""
-# 
-#     def __init__(self):
-#         self.document_fetcher = DocumentFetcher()
-#         self.sentiment_analyzer = SentimentAnalyzer()
-# 
-#     def perform_analysis(self, visualizer: SeriesVisualizer, 
-#                         start_date: datetime, end_date: datetime) -> None:
-#         """
-#         Perform complete context analysis including document fetching and sentiment analysis.
-#         
-#         Args:
-#             visualizer: SeriesVisualizer instance
-#             start_date: Analysis start date
-#             end_date: Analysis end date
-#         """
-#         SeriesDataManager.clear_analysis_data()
-#         
-#         with st.spinner("Iniciando búsqueda de documentos..."):
-#             try:
-#                 # Extract metadata
-#                 meta = visualizer.metadata
-#                 country_code = self._extract_country_code(meta)
-#                 series_name = self._extract_series_name(meta)
-#                 
-#                 if not all([country_code, series_name]):
-#                     st.error("Faltan datos (país, nombre de serie) para la búsqueda.")
-#                     return
-# 
-#                 # Fetch documents
-#                 documents = self._fetch_documents_with_progress(
-#                     country_code, series_name, start_date, end_date
-#                 )
-#                 
-#                 if not documents:
-#                     st.warning(f"No se encontraron documentos para '{series_name}' "
-#                               f"en {country_code} en las fechas seleccionadas.")
-#                     return
-# 
-#                 # Analyze sentiment
-#                 sentiment_df = self._analyze_sentiment_with_progress(documents)
-#                 
-#                 # Store results
-#                 st.session_state[SessionStateKeys.RAW_DOCUMENTS] = documents
-#                 st.session_state[SessionStateKeys.SENTIMENT_DF] = sentiment_df
-#                 
-#                 st.success(f"Análisis completado. Se procesaron {len(documents)} "
-#                           f"documentos en {len(sentiment_df)} días.")
-#                 
-#             except (DataFetchError, SentimentAnalysisError) as e:
-#                 st.error(f"Error durante el análisis: {e}")
-#             except Exception as e:
-#                 st.error(f"Ocurrió un error inesperado durante el análisis: {e}")
-#                 st.error(traceback.format_exc())
-# 
-#     def _extract_country_code(self, meta) -> Optional[str]:
-#         """Extract country code from metadata."""
-#         return getattr(meta.country, 'id', None) if hasattr(meta, 'country') else None
-# 
-#     def _extract_series_name(self, meta) -> Optional[str]:
-#         """Extract series name from metadata."""
-#         return getattr(meta, 'name', None)
-# 
-#     def _fetch_documents_with_progress(self, country_code: str, series_name: str,
-#                                      start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
-#         """Fetch documents with progress indication."""
-#         spinner = st.spinner("Buscando documentos...")
-#         with spinner:
-#             documents = self.document_fetcher.fetch_documents(
-#                 country_code, series_name, start_date, end_date
-#             )
-#             spinner.text = f"Encontrados {len(documents)} documentos"
-#             return documents
-# 
-#     def _analyze_sentiment_with_progress(self, documents: List[Dict[str, Any]]) -> pd.DataFrame:
-#         """Analyze sentiment with progress indication."""
-#         with st.spinner(f"Analizando {len(documents)} documentos..."):
-#             return self.sentiment_analyzer.analyze_documents(documents)
+class SentimentAnalyzer:
+    """Handles sentiment analysis operations."""
 
+    def __init__(self):
+        self.analyzer = SentimentIntensityAnalyzer()
 
+    def analyze_documents(self, documents: List[Dict[str, Any]]) -> pd.DataFrame:
+        """
+        Analyze sentiment of documents and return aggregated results.
+        
+        Args:
+            documents: List of document dictionaries
+            
+        Returns:
+            DataFrame with daily sentiment scores
+            
+        Raises:
+            SentimentAnalysisError: If analysis fails
+        """
+        if not documents:
+            return pd.DataFrame()
+
+        sentiment_results = []
+        
+        for doc in documents:
+            text = self._extract_text_from_document(doc)
+            if not text:
+                continue
+                
+            score = self._calculate_sentiment_score(text)
+            if self._is_valid_sentiment_score(score):
+                sentiment_results.append({
+                    "date": doc.get("creationDate"),
+                    "sentiment_score": score,
+                    "title": doc.get('title', '')[:Config.MAX_TITLE_LENGTH] + "..."
+                })
+
+        if not sentiment_results:
+            return pd.DataFrame()
+
+        return self._aggregate_sentiment_by_date(sentiment_results)
+
+    def _extract_text_from_document(self, doc: Dict[str, Any]) -> str:
+        """Extract meaningful text from document."""
+        title = doc.get('title', '')
+        abstract = doc.get('abstract', '')
+        text = f"{title}. {abstract}".strip()
+        return text if text != '.' else ''
+
+    def _calculate_sentiment_score(self, text: str) -> float:
+        """Calculate sentiment score for text."""
+        scores = self.analyzer.polarity_scores(text)
+        return scores['compound']
+
+    def _is_valid_sentiment_score(self, score: float) -> bool:
+        """Validate sentiment score is within expected range."""
+        return -1 <= score <= 1
+
+    def _aggregate_sentiment_by_date(self, sentiment_results: List[Dict[str, Any]]) -> pd.DataFrame:
+        """Aggregate sentiment scores by date."""
+        df = pd.DataFrame(sentiment_results)
+        df['date'] = pd.to_datetime(df['date']).dt.date
+        
+        df_grouped = df.groupby('date').agg({
+            'sentiment_score': 'mean',
+            'title': 'count'
+        }).reset_index()
+        
+        df_grouped.rename(columns={'title': 'doc_count'}, inplace=True)
+        
+        # Validate final results
+        if (df_grouped['sentiment_score'].max() > 1 or 
+            df_grouped['sentiment_score'].min() < -1):
+            raise SentimentAnalysisError("Sentiment scores outside valid range")
+        
+        return df_grouped
+class ContextAnalyzer:
+    """Handles context analysis operations."""
+
+    def __init__(self):
+        self.document_fetcher = DocumentFetcher()
+        self.sentiment_analyzer = SentimentAnalyzer()
+
+    def perform_analysis(self, visualizer: SeriesVisualizer, 
+                        start_date: datetime, end_date: datetime) -> None:
+        """
+        Perform complete context analysis including document fetching and sentiment analysis.
+        
+        Args:
+            visualizer: SeriesVisualizer instance
+            start_date: Analysis start date
+            end_date: Analysis end date
+        """
+        st.session_state[SessionStateKeys.SENTIMENT_DF] = None
+        st.session_state[SessionStateKeys.RAW_DOCUMENTS] = []
+        #SeriesDataManager.clear_analysis_data()        
+        with st.spinner("Iniciando búsqueda de documentos..."):
+            try:
+                # Extract metadata
+                meta = visualizer.metadata
+                country_code = self._extract_country_code(meta)
+                series_name = self._extract_series_name(meta)
+                
+                if not all([country_code, series_name]):
+                    st.error("Faltan datos (país, nombre de serie) para la búsqueda.")
+                    return
+
+                # Fetch documents
+                documents = self._fetch_documents_with_progress(
+                    country_code, series_name, start_date, end_date
+                )
+                
+                if not documents:
+                    st.warning(f"No se encontraron documentos para '{series_name}' "
+                            f"en {country_code} en las fechas seleccionadas.")
+                    return
+
+                # Analyze sentiment
+                sentiment_df = self._analyze_sentiment_with_progress(documents)
+                
+                # Store results
+                st.session_state[SessionStateKeys.RAW_DOCUMENTS] = documents
+                st.session_state[SessionStateKeys.SENTIMENT_DF] = sentiment_df
+                
+                st.success(f"Análisis completado. Se procesaron {len(documents)} "
+                        f"documentos en {len(sentiment_df)} días.")
+                
+            except (DataFetchError, SentimentAnalysisError) as e:
+                st.error(f"Error durante el análisis: {e}")
+            except Exception as e:
+                st.error(f"Ocurrió un error inesperado durante el análisis: {e}")
+                st.error(traceback.format_exc())
+
+    def _extract_country_code(self, meta) -> Optional[str]:
+        """Extract country code from metadata."""
+        return getattr(meta.country, 'id', None) if hasattr(meta, 'country') else None
+
+    def _extract_series_name(self, meta) -> Optional[str]:
+        """Extract series name from metadata."""
+        return getattr(meta, 'name', None)
+
+    def _fetch_documents_with_progress(self, country_code: str, series_name: str,
+                                    start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
+        """Fetch documents with progress indication."""
+        spinner = st.spinner("Buscando documentos...")
+        with spinner:
+            documents = self.document_fetcher.fetch_documents(
+                country_code, series_name, start_date, end_date
+            )
+            spinner.text = f"Encontrados {len(documents)} documentos"
+            return documents
+
+    def _analyze_sentiment_with_progress(self, documents: List[Dict[str, Any]]) -> pd.DataFrame:
+        """Analyze sentiment with progress indication."""
+        with st.spinner(f"Analizando {len(documents)} documentos..."):
+            return self.sentiment_analyzer.analyze_documents(documents)
+        
 # COMMENTED CODE: Original chart and document rendering logic
 # This code handled the display of sentiment analysis results and document details
 # We're keeping it commented for future reference
@@ -764,15 +761,28 @@ class SourcesComparisonRenderer:
         if df_series is None or df_series.empty:
             st.warning("No hay datos de series disponibles para la comparación.")
             return
-
-        # Generate sample sentiment data for demonstration
-        # TODO: real implementation, this would come from actual sentiment analysis
-        source1_data = SourcesComparisonRenderer._generate_sample_sentiment_data(df_series)
         
+        # Generate sample sentiment data for demonstration
+        # The real implementation, this would come from actual sentiment analysis
+        # source1_data = SourcesComparisonRenderer._generate_sample_sentiment_data(df_series)
+        
+        # 1. Obtener el DataFrame de sentimiento desde el estado de la sesión.
+        sentiment_df = st.session_state.get(SessionStateKeys.SENTIMENT_DF)
+
+        # 2. Validar que tenemos datos de sentimiento.
+        if sentiment_df is None or sentiment_df.empty:
+            st.warning("No se encontraron datos de sentimiento para mostrar. Ejecuta el 'Context analysis' primero.")
+            return
+
+        # 3. Preparar los datos de sentimiento para el gráfico.
+        source1_data = {
+            "time": pd.to_datetime(sentiment_df['date']),
+            "sentiment": sentiment_df['sentiment_score']
+        }
+
         # Prepare series data for comparison
         source2_data = {
             "time": df_series['Date'],
-            "sentiment": np.random.uniform(-1, 1, size=len(df_series)),  # Placeholder
             "series_id": df_series['Value']
         }
 
@@ -789,7 +799,7 @@ class SourcesComparisonRenderer:
             
         except Exception as e:
             st.error(f"Error al generar la gráfica de comparación: {e}")
-
+        
     @staticmethod
     def _generate_sample_sentiment_data(df_series: pd.DataFrame) -> Dict[str, Any]:
         """
@@ -828,7 +838,7 @@ class MainApplication:
 
     def __init__(self):
         # Commented out context analyzer since we're not using it anymore
-        # self.context_analyzer = ContextAnalyzer()
+        self.context_analyzer = ContextAnalyzer()
         pass
 
     def render_sidebar(self) -> Optional[str]:
@@ -916,16 +926,19 @@ class MainApplication:
                         st.session_state[SessionStateKeys.SELECTED_START_DATE] = start_date
                         st.session_state[SessionStateKeys.SELECTED_END_DATE] = end_date
                         # Instead of performing the original analysis, show sources comparison
+                        #st.session_state[SessionStateKeys.SHOW_SOURCES_COMPARISON] = True
+                        #st.success("¡Análisis de contexto iniciado! Mostrando comparación de fuentes.")
+                        #st.rerun()
+                        
+                        # COMMENTED: Original context analysis call
+                        self.context_analyzer.perform_analysis(
+                             visualizer, 
+                             datetime.combine(start_date, datetime.min.time()),
+                             datetime.combine(end_date, datetime.min.time())
+                         )
                         st.session_state[SessionStateKeys.SHOW_SOURCES_COMPARISON] = True
                         st.success("¡Análisis de contexto iniciado! Mostrando comparación de fuentes.")
                         st.rerun()
-                        
-                        # COMMENTED: Original context analysis call
-                        # self.context_analyzer.perform_analysis(
-                        #     visualizer, 
-                        #     datetime.combine(start_date, datetime.min.time()),
-                        #     datetime.combine(end_date, datetime.min.time())
-                        # )
 
         elif df_series is not None:
             st.info("La serie seleccionada no contiene puntos de datos para graficar.")
