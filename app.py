@@ -10,10 +10,12 @@ import traceback
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
+import io
 
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import openpyxl
 import requests
 import nltk
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
@@ -36,7 +38,7 @@ class Config:
     LOGO_WIDTH = 250
     SIDEBAR_LOGO_WIDTH = 200
     EMIS_API_URL = "https://api.emis.com/v2/company/documents"
-    MAX_DOCUMENTS_PAGES = 10
+    MAX_DOCUMENTS_PAGES = 40
     DOCUMENTS_PER_PAGE = 100
     MAX_TITLE_LENGTH = 50
 
@@ -54,6 +56,7 @@ class SessionStateKeys:
     SELECTED_START_DATE = 'selected_start_date'
     SELECTED_END_DATE = 'selected_end_date'
     SHOW_ALL_DATA = 'show_all_data'
+    INDIVIDUAL_SENTIMENT_RESULTS = 'individual_sentiment_results'
 
 
 class AuthenticationError(Exception):
@@ -175,7 +178,8 @@ class AppInitializer:
             SessionStateKeys.SHOW_SOURCES_COMPARISON: False,
             SessionStateKeys.SELECTED_START_DATE: None,
             SessionStateKeys.SELECTED_END_DATE: None,
-            SessionStateKeys.SHOW_ALL_DATA: False
+            SessionStateKeys.SHOW_ALL_DATA: False,
+             SessionStateKeys.INDIVIDUAL_SENTIMENT_RESULTS: None
         }
         
         for key, default_value in default_values.items():
@@ -371,11 +375,14 @@ class SentimentAnalyzer:
                 sentiment_results.append({
                     "date": doc.get("creationDate"),
                     "sentiment_score": score,
-                    "title": doc.get('title', '')[:Config.MAX_TITLE_LENGTH] + "..."
+                    "title": doc.get('title', '')[:Config.MAX_TITLE_LENGTH] + "...",
+                    "abstract": doc.get('abstract', '')
                 })
 
         if not sentiment_results:
             return pd.DataFrame()
+        
+        st.session_state[SessionStateKeys.INDIVIDUAL_SENTIMENT_RESULTS] = sentiment_results
 
         return self._aggregate_sentiment_by_date(sentiment_results)
 
@@ -432,6 +439,7 @@ class ContextAnalyzer:
         """
         st.session_state[SessionStateKeys.SENTIMENT_DF] = None
         st.session_state[SessionStateKeys.RAW_DOCUMENTS] = []
+        st.session_state[SessionStateKeys.INDIVIDUAL_SENTIMENT_RESULTS] = None
         #SeriesDataManager.clear_analysis_data()        
         with st.spinner("Iniciando búsqueda de documentos..."):
             try:
@@ -832,6 +840,44 @@ class SourcesComparisonRenderer:
             "series_id": series_values
         }
 
+class ReportGenerator:
+    """Handles the generation of downloadable reports."""
+
+    @staticmethod
+    def create_excel_report() -> Optional[bytes]:
+        """
+        Creates an XLSX file in memory from the individual sentiment results.
+        
+        Returns:
+            Bytes object representing the XLSX file, or None if no data.
+        """
+        individual_results = st.session_state.get(SessionStateKeys.INDIVIDUAL_SENTIMENT_RESULTS)
+        
+        if not individual_results:
+            return None
+
+        # Convertir la lista de diccionarios a un DataFrame de Pandas
+        df = pd.DataFrame(individual_results)
+        
+        # Seleccionar y renombrar las columnas para el reporte
+        report_df = df[['date', 'title','abstract', 'sentiment_score']].copy()
+        report_df.rename(columns={
+            'date': 'Fecha',
+            'title': 'Título del Documento',
+            'abstract': 'Resumen del Documento',
+            'sentiment_score': 'Puntuación de Sentimiento'
+        }, inplace=True)
+        
+        # Crear un buffer de bytes en memoria para guardar el archivo Excel
+        output = io.BytesIO()
+        
+        # Escribir el DataFrame al buffer en formato Excel
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            report_df.to_excel(writer, index=False, sheet_name='ReporteSentimiento')
+        
+        # Obtener los bytes del buffer para la descarga
+        processed_data = output.getvalue()
+        return processed_data
 
 class MainApplication:
     """Main application controller."""
@@ -895,18 +941,26 @@ class MainApplication:
                 start_date_saved = st.session_state.get(SessionStateKeys.SELECTED_START_DATE)
                 end_date_saved = st.session_state.get(SessionStateKeys.SELECTED_END_DATE)
 
-                # Filtrar el DataFrame principal con las fechas guardadas
                 if start_date_saved and end_date_saved:
                     df_filtered_comparison = df_series[
                         (df_series["Date"].dt.date >= start_date_saved) & 
                         (df_series["Date"].dt.date <= end_date_saved)
                     ]
                 else:
-                    # Si no hay fechas, usa el DataFrame completo como respaldo
                     df_filtered_comparison = df_series
 
                 # Show sources comparison chart con los datos ya filtrados
                 SourcesComparisonRenderer.render_sources_comparison_chart(df_filtered_comparison)
+                #Generate report
+                excel_data = ReportGenerator.create_excel_report()
+                if excel_data:
+                    series_id = getattr(visualizer.metadata, 'id', 'serie')
+                    st.download_button(
+                        label="Descargar Reporte",
+                        data=excel_data,
+                        file_name=f"reporte_sentimiento_{series_id}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
                 # Add button to go back to original chart
                 if st.button("Back"):
                     st.session_state[SessionStateKeys.SHOW_SOURCES_COMPARISON] = False
