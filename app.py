@@ -287,9 +287,12 @@ class SeriesDataManager:
 
 class DocumentFetcher:
     """Handles document fetching from EMIS API."""
-
     def __init__(self):
-        self.api_token = os.getenv("EMIS_DOCUMENTS_API_KEY")
+
+        if "EMIS_DOCUMENTS_API_KEY" in st.secrets:
+            self.api_token = st.secrets["EMIS_DOCUMENTS_API_KEY"]
+        else:
+            self.api_token = os.getenv("EMIS_DOCUMENTS_API_KEY")
  
     def fetch_documents(self, country_code: str, series_name: str, 
                     start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
@@ -691,14 +694,11 @@ class SeriesChartRenderer:
         max_date = df["Date"].max().date()
 
         if st.session_state.get(SessionStateKeys.SHOW_ALL_DATA, False):
-            # Si el usuario quiere ver todos los datos, la fecha de inicio es la mínima
             default_start_date = min_date
         else:
-            # Por defecto, mostrar los últimos 40 puntos de datos
             if len(df) > 40:
                 default_start_date = df.tail(40)["Date"].min().date()
             else:
-                # Si hay menos de 40 puntos, mostrarlos todos
                 default_start_date = min_date
         
         # Date selection
@@ -707,7 +707,7 @@ class SeriesChartRenderer:
         with col1:
             start_date = st.date_input(
                 "Fecha de Inicio", 
-                value=default_start_date, # Usar el valor por defecto calculado
+                value=default_start_date,
                 min_value=min_date, 
                 max_value=max_date, 
                 key="date_start"
@@ -1040,12 +1040,7 @@ class MainApplication:
                     if start_date and end_date:
                         st.session_state[SessionStateKeys.SELECTED_START_DATE] = start_date
                         st.session_state[SessionStateKeys.SELECTED_END_DATE] = end_date
-                        # Instead of performing the original analysis, show sources comparison
-                        #st.session_state[SessionStateKeys.SHOW_SOURCES_COMPARISON] = True
-                        #st.success("¡Análisis de contexto iniciado! Mostrando comparación de fuentes.")
-                        #st.rerun()
                         
-                        # COMMENTED: Original context analysis call
                         self.context_analyzer.perform_analysis(
                              visualizer, 
                              datetime.combine(start_date, datetime.min.time()),
