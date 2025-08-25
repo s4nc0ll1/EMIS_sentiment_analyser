@@ -19,7 +19,6 @@ import requests
 import nltk
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 from dotenv import load_dotenv
-from streamlit_plotly_events import plotly_events
 from ceic_api_client.pyceic import Ceic
 import matplotlib.pyplot as plt
 import numpy as np
