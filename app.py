@@ -15,7 +15,6 @@ import io
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import openpyxl
 import requests
 import nltk
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
