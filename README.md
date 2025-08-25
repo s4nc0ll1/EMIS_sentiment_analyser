@@ -1,2 +1,2 @@
 # EMIS_sentiment_analyser
-Streamlit App that uses Emis documents API and NLTK for sentiment analisis
+Streamlit App that uses CEIC API and EMIS documents API with NLTK for sentiment analysis, and context analysis of series
