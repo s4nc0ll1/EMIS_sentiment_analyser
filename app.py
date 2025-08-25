@@ -7,7 +7,7 @@ CEIC economic data series along with related news sentiment analysis.
 
 import os
 import traceback
-from datetime import datetime
+from datetime import datetime, date
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 import io
@@ -57,6 +57,7 @@ class SessionStateKeys:
     SELECTED_END_DATE = 'selected_end_date'
     SHOW_ALL_DATA = 'show_all_data'
     INDIVIDUAL_SENTIMENT_RESULTS = 'individual_sentiment_results'
+    SELECTED_ANALYSIS_DATE = 'selected_analysis_date'
 
 
 class AuthenticationError(Exception):
@@ -179,7 +180,8 @@ class AppInitializer:
             SessionStateKeys.SELECTED_START_DATE: None,
             SessionStateKeys.SELECTED_END_DATE: None,
             SessionStateKeys.SHOW_ALL_DATA: False,
-             SessionStateKeys.INDIVIDUAL_SENTIMENT_RESULTS: None
+            SessionStateKeys.INDIVIDUAL_SENTIMENT_RESULTS: None,
+            SessionStateKeys.SELECTED_ANALYSIS_DATE: None
         }
         
         for key, default_value in default_values.items():
@@ -375,7 +377,7 @@ class SentimentAnalyzer:
                 sentiment_results.append({
                     "date": doc.get("creationDate"),
                     "sentiment_score": score,
-                    "title": doc.get('title', '')[:Config.MAX_TITLE_LENGTH] + "...",
+                    "title": doc.get('title', ''),
                     "abstract": doc.get('abstract', '')
                 })
 
@@ -440,6 +442,7 @@ class ContextAnalyzer:
         st.session_state[SessionStateKeys.SENTIMENT_DF] = None
         st.session_state[SessionStateKeys.RAW_DOCUMENTS] = []
         st.session_state[SessionStateKeys.INDIVIDUAL_SENTIMENT_RESULTS] = None
+        st.session_state[SessionStateKeys.SELECTED_ANALYSIS_DATE] = None
         #SeriesDataManager.clear_analysis_data()        
         with st.spinner("Iniciando búsqueda de documentos..."):
             try:
@@ -774,15 +777,12 @@ class SourcesComparisonRenderer:
         # The real implementation, this would come from actual sentiment analysis
         # source1_data = SourcesComparisonRenderer._generate_sample_sentiment_data(df_series)
         
-        # 1. Obtener el DataFrame de sentimiento desde el estado de la sesión.
         sentiment_df = st.session_state.get(SessionStateKeys.SENTIMENT_DF)
 
-        # 2. Validar que tenemos datos de sentimiento.
         if sentiment_df is None or sentiment_df.empty:
             st.warning("No se encontraron datos de sentimiento para mostrar. Ejecuta el 'Context analysis' primero.")
             return
 
-        # 3. Preparar los datos de sentimiento para el gráfico.
         source1_data = {
             "time": pd.to_datetime(sentiment_df['date']),
             "sentiment": sentiment_df['sentiment_score']
@@ -951,6 +951,67 @@ class MainApplication:
 
                 # Show sources comparison chart con los datos ya filtrados
                 SourcesComparisonRenderer.render_sources_comparison_chart(df_filtered_comparison)
+
+                st.markdown("---")
+                st.subheader("Explorar Documentos por Fecha")
+                
+                sentiment_df = st.session_state.get(SessionStateKeys.SENTIMENT_DF)
+                
+                if sentiment_df is not None and not sentiment_df.empty:
+                    # Crear la lista de fechas disponibles para el menú desplegable
+                    available_dates = sorted(sentiment_df['date'].unique(), reverse=True)
+                    
+                    # Añadir una opción por defecto para que no haya nada seleccionado
+                    display_options = ["— Selecciona una fecha del gráfico —"] + available_dates
+                    
+                    selected_date = st.selectbox(
+                        "Selecciona una fecha para ver los documentos asociados:",
+                        options=display_options,
+                        format_func=lambda date: "— Selecciona una fecha del gráfico —" if isinstance(date, str) else date.strftime('%Y-%m-%d')
+                    )
+
+                    # Si el usuario ha seleccionado una fecha válida...
+                    if isinstance(selected_date, date):
+                        st.session_state[SessionStateKeys.SELECTED_ANALYSIS_DATE] = selected_date
+                        
+                        # Obtener todos los resultados individuales
+                        all_docs = st.session_state.get(SessionStateKeys.INDIVIDUAL_SENTIMENT_RESULTS, [])
+                        
+                        # Filtrar los documentos para la fecha seleccionada
+                        selected_date_str = selected_date.strftime('%Y-%m-%d')
+                        docs_for_date = [
+                            doc for doc in all_docs 
+                            if doc['date'].startswith(selected_date_str)
+                        ]
+
+                        st.subheader(f"Documentos del {selected_date_str}")
+                        
+                        if not docs_for_date:
+                            st.warning("No se encontraron detalles de documentos para esta fecha.")
+                        else:
+                            # Mostrar cada documento en una sección expandible
+                            for doc in docs_for_date:
+                                with st.expander(f"{doc['title']}"):
+                                    
+                                    score = doc['sentiment_score']
+                                    # Determinar el color y la dirección de la métrica
+                                    if score > 0.05:
+                                        delta_color = "normal" # Verde
+                                    elif score < -0.05:
+                                        delta_color = "inverse" # Rojo
+                                    else:
+                                        delta_color = "off" # Gris
+                                    
+                                    st.metric(
+                                        label="Puntuación de Sentimiento",
+                                        value=f"{score:.3f}",
+                                        delta="Positivo" if score > 0.05 else ("Negativo" if score < -0.05 else "Neutral"),
+                                        delta_color=delta_color
+                                    )
+                                    
+                                    st.caption("Resumen:")
+                                    st.write(doc.get('abstract', 'No disponible.'))
+
                 #Generate report
                 excel_data = ReportGenerator.create_excel_report()
                 if excel_data:
