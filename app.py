@@ -287,10 +287,10 @@ class DocumentFetcher:
     """Handles document fetching from EMIS API."""
     def __init__(self):
 
-        if "EMIS_DOCUMENTS_API_KEY" in st.secrets:
-            self.api_token = st.secrets["EMIS_DOCUMENTS_API_KEY"]
-        else:
+        if os.getenv("EMIS_DOCUMENTS_API_KEY"):
             self.api_token = os.getenv("EMIS_DOCUMENTS_API_KEY")
+        else:
+            self.api_token = st.secrets["EMIS_DOCUMENTS_API_KEY"]
  
     def fetch_documents(self, country_code: str, series_name: str, 
                     start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
