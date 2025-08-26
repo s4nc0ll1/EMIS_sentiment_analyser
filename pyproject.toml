@@ -20,5 +20,6 @@ dev = [
     "isort>=6.0.1",
 ]
 
-[tool.uv.pip]
-extra-index-url = ["https://downloads.ceicdata.com/python"]
+[[tool.uv.index]]
+name = 'ceic-api-client'
+url = "https://downloads.ceicdata.com/python"

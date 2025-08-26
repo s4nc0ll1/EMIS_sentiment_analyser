@@ -70,6 +70,19 @@ wheels = [
 ]
 
 [[package]]
+name = "ceic-api-client"
+version = "2.11.4.384"
+source = { registry = "https://downloads.ceicdata.com/python" }
+dependencies = [
+    { name = "certifi" },
+    { name = "pandas" },
+    { name = "python-dateutil" },
+    { name = "six" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://downloads.ceicdata.com/python/ceic-api-client/ceic_api_client-2.11.4.384.tar.gz" }
+
+[[package]]
 name = "certifi"
 version = "2025.8.3"
 source = { registry = "https://pypi.org/simple" }
@@ -146,6 +159,7 @@ name = "emis-sentiment-analyser"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "ceic-api-client" },
     { name = "nltk" },
     { name = "pandas" },
     { name = "plotly" },
@@ -162,6 +176,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "ceic-api-client" },
     { name = "nltk", specifier = ">=3.9.1" },
     { name = "pandas", specifier = ">=2.3.1" },
     { name = "plotly", specifier = ">=6.2.0" },
