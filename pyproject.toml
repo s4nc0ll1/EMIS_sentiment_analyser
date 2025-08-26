@@ -6,11 +6,14 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "ceic-api-client",
+    "matplotlib>=3.10.5",
+    "mplcursors>=0.6",
     "nltk>=3.9.1",
     "pandas>=2.3.1",
     "plotly>=6.2.0",
     "python-dotenv>=1.1.1",
     "requests>=2.32.4",
+    "seaborn>=0.13.2",
     "streamlit>=1.28.0",
 ]
 
