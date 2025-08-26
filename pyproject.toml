@@ -9,6 +9,7 @@ dependencies = [
     "matplotlib>=3.10.5",
     "mplcursors>=0.6",
     "nltk>=3.9.1",
+    "openpyxl",
     "pandas>=2.3.1",
     "plotly>=6.2.0",
     "python-dotenv>=1.1.1",
