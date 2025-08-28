@@ -193,7 +193,7 @@ class AppInitializer:
         try:
             nltk.data.find('sentiment/vader_lexicon.zip')
         except LookupError:
-            st.info("Descargando recursos para análisis de sentimientos (VADER)...")
+            #st.info("Descargando recursos para análisis de sentimientos (VADER)...")
             nltk.download('vader_lexicon')
 
 
